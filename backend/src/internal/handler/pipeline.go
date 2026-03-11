@@ -37,11 +37,13 @@ type PipelineRun struct {
 }
 
 func defaultStages(cicdType string) []string {
+	// Stage names must match exactly what the CI/CD pipeline sends
+	// in its notifyStage() / notify-platform calls
 	switch strings.ToLower(cicdType) {
 	case "jenkins":
 		return []string{
-			"Checkout", "Build", "Test",
-			"Docker Build", "Docker Push", "Deploy", "Health Check",
+			"Checkout", "Setup", "Build", "Test",
+			"Push Image", "Deploy", "Health Check",
 		}
 	default:
 		return []string{
@@ -398,7 +400,7 @@ func UpdatePipelineStage(w http.ResponseWriter, r *http.Request) {
 
 // ── updateRunStatus recalculates run status from all its stages ──
 func updateRunStatus(runID string) string {
-	var total, pending, running, failed, success int
+	var total, pending, running, failed, success, skipped int
 
 	rows, err := db.DB.Query(`SELECT status FROM pipeline_stages WHERE run_id=?`, runID)
 	if err != nil {
@@ -411,20 +413,29 @@ func updateRunStatus(runID string) string {
 		rows.Scan(&s)
 		total++
 		switch s {
-		case "pending": pending++
-		case "running": running++
-		case "failed":  failed++
-		case "success": success++
+		case "pending":  pending++
+		case "running":  running++
+		case "failed":   failed++
+		case "success":  success++
+		case "skipped":  skipped++
 		}
 	}
 
+	// A run is complete when every stage is in a terminal state
+	// (success or skipped) with no failures
 	var status string
 	switch {
-	case failed > 0:       status = "failed"
-	case running > 0:      status = "running"
-	case pending == total: status = "pending"
-	case success == total: status = "success"
-	default:               status = "running"
+	case failed > 0:
+		status = "failed"
+	case running > 0:
+		status = "running"
+	case pending == total:
+		status = "pending"
+	case success+skipped == total:
+		// All stages done — success even if some were skipped (rollback)
+		status = "success"
+	default:
+		status = "running"
 	}
 
 	extra := ""
