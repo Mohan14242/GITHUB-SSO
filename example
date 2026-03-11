@@ -12,7 +12,7 @@ enableWebhook: true
 
 commands to add 
 
-eval "$(ssh-agent -s)" && ssh-add ../../platform
+eval "$(ssh-agent -s)" && ssh-add ../platform
 
 
 platform.buyforu.run.place
