@@ -153,8 +153,8 @@ func (g *GitHubClient) CreateWebhook(repo, webhookURL string) error {
 }
 
 // ── TriggerGitHubDeploy dispatches a workflow on an org repo ────
-func TriggerGitHubDeploy(repo, branch string) error {
-	log.Printf("[GITHUB][DEPLOY] starting repo=%s branch=%s", repo, branch)
+func TriggerGitHubDeploy(repo, branch string, runID int64) error {
+	log.Printf("[GITHUB][DEPLOY] starting repo=%s branch=%s runID=%d", repo, branch, runID)
 
 	token, err := aws.GetGitToken("git-token")
 	if err != nil {
@@ -173,13 +173,16 @@ func TriggerGitHubDeploy(repo, branch string) error {
 
 	payload := map[string]interface{}{
 		"ref": branch,
+		"inputs": map[string]string{
+			"run_id": fmt.Sprintf("%d", runID),
+		},
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {
 		log.Printf("[GITHUB][DEPLOY][ERROR] failed to marshal payload: %v", err)
 		return fmt.Errorf("failed to marshal deploy payload: %w", err)
 	}
-	log.Printf("[GITHUB][DEPLOY] payload ready ref=%s", branch)
+	log.Printf("[GITHUB][DEPLOY] payload ready ref=%s runID=%d", branch, runID)
 
 	url := fmt.Sprintf(
 		"https://api.github.com/repos/%s/%s/actions/workflows/%s/dispatches",
@@ -209,28 +212,28 @@ func TriggerGitHubDeploy(repo, branch string) error {
 	}
 	defer resp.Body.Close()
 
-	log.Printf("[GITHUB][DEPLOY] response status=%s duration=%s org=%s repo=%s branch=%s",
-		resp.Status, httpDuration, org, repo, branch)
+	log.Printf("[GITHUB][DEPLOY] response status=%s duration=%s org=%s repo=%s branch=%s runID=%d",
+		resp.Status, httpDuration, org, repo, branch, runID)
 
 	if resp.StatusCode != http.StatusNoContent {
 		bodyBytes, _ := io.ReadAll(resp.Body)
-		log.Printf("[GITHUB][DEPLOY][ERROR] dispatch rejected status=%s org=%s repo=%s body=%s",
-			resp.Status, org, repo, strings.TrimSpace(string(bodyBytes)))
+		log.Printf("[GITHUB][DEPLOY][ERROR] dispatch rejected status=%s org=%s repo=%s runID=%d body=%s",
+			resp.Status, org, repo, runID, strings.TrimSpace(string(bodyBytes)))
 		return fmt.Errorf(
-			"github deploy dispatch failed: org=%s repo=%s status=%s body=%s",
-			org, repo, resp.Status, strings.TrimSpace(string(bodyBytes)),
+			"github deploy dispatch failed: org=%s repo=%s runID=%d status=%s body=%s",
+			org, repo, runID, resp.Status, strings.TrimSpace(string(bodyBytes)),
 		)
 	}
 
-	log.Printf("[GITHUB][DEPLOY] ✅ workflow dispatched successfully org=%s repo=%s branch=%s",
-		org, repo, branch)
+	log.Printf("[GITHUB][DEPLOY] ✅ workflow dispatched successfully org=%s repo=%s branch=%s runID=%d",
+		org, repo, branch, runID)
 	return nil
 }
 
 // ── TriggerGitHubRollback dispatches a rollback workflow ────────
-func TriggerGitHubRollback(repo, environment, version string) error {
-	log.Printf("[GITHUB][ROLLBACK] starting repo=%s environment=%s version=%s",
-		repo, environment, version)
+func TriggerGitHubRollback(repo, environment, version string, runID int64) error {
+	log.Printf("[GITHUB][ROLLBACK] starting repo=%s environment=%s version=%s runID=%d",
+		repo, environment, version, runID)
 
 	token, err := aws.GetGitToken("git-token")
 	if err != nil {
@@ -248,14 +251,15 @@ func TriggerGitHubRollback(repo, environment, version string) error {
 	workflow := "cicd.yaml"
 	ref      := environmentBranch(environment)
 
-	log.Printf("[GITHUB][ROLLBACK] resolved ref=%s for environment=%s org=%s repo=%s",
-		ref, environment, org, repo)
+	log.Printf("[GITHUB][ROLLBACK] resolved ref=%s for environment=%s org=%s repo=%s runID=%d",
+		ref, environment, org, repo, runID)
 
 	payload := map[string]interface{}{
 		"ref": ref,
 		"inputs": map[string]string{
 			"rollback":         "true",
 			"rollback_version": version,
+			"run_id":           fmt.Sprintf("%d", runID),
 		},
 	}
 	body, err := json.Marshal(payload)
@@ -293,21 +297,21 @@ func TriggerGitHubRollback(repo, environment, version string) error {
 	}
 	defer resp.Body.Close()
 
-	log.Printf("[GITHUB][ROLLBACK] response status=%s duration=%s org=%s repo=%s",
-		resp.Status, httpDuration, org, repo)
+	log.Printf("[GITHUB][ROLLBACK] response status=%s duration=%s org=%s repo=%s runID=%d",
+		resp.Status, httpDuration, org, repo, runID)
 
 	if resp.StatusCode != http.StatusNoContent {
 		bodyBytes, _ := io.ReadAll(resp.Body)
-		log.Printf("[GITHUB][ROLLBACK][ERROR] dispatch rejected status=%s org=%s repo=%s body=%s",
-			resp.Status, org, repo, strings.TrimSpace(string(bodyBytes)))
+		log.Printf("[GITHUB][ROLLBACK][ERROR] dispatch rejected status=%s org=%s repo=%s runID=%d body=%s",
+			resp.Status, org, repo, runID, strings.TrimSpace(string(bodyBytes)))
 		return fmt.Errorf(
-			"github rollback dispatch failed: org=%s repo=%s status=%s body=%s",
-			org, repo, resp.Status, strings.TrimSpace(string(bodyBytes)),
+			"github rollback dispatch failed: org=%s repo=%s runID=%d status=%s body=%s",
+			org, repo, runID, resp.Status, strings.TrimSpace(string(bodyBytes)),
 		)
 	}
 
-	log.Printf("[GITHUB][ROLLBACK] ✅ rollback workflow dispatched successfully org=%s repo=%s environment=%s version=%s",
-		org, repo, environment, version)
+	log.Printf("[GITHUB][ROLLBACK] ✅ rollback workflow dispatched successfully org=%s repo=%s environment=%s version=%s runID=%d",
+		org, repo, environment, version, runID)
 	return nil
 }
 

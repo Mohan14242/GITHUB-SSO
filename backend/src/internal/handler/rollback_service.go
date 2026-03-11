@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"src/src/internal/audit"
+	"src/src/internal/auth"
 	"src/src/internal/cicd"
 	"src/src/internal/db"
 )
@@ -149,17 +150,41 @@ func RollbackService(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("[ROLLBACK] CICD type=%s repo=%s\n", cicdType, repo)
 
+	// get actor for pipeline run
+	actor := "unknown"
+	if claims := auth.ClaimsFromContext(r.Context()); claims != nil {
+		actor = claims.GithubLogin
+	}
+
+	// 🏗️ Create pipeline run
+	runID, err := CreatePipelineRun(serviceName, req.Environment, actor, cicdType)
+	if err != nil {
+		log.Printf("[ROLLBACK][ERROR] Failed to create pipeline run: service=%s env=%s err=%v\n",
+			serviceName, req.Environment, err)
+		audit.Log(r, audit.Entry{
+			Action:       "rollback",
+			ResourceType: "deployment",
+			ResourceName: serviceName,
+			Environment:  req.Environment,
+			Status:       "failed",
+			Details:      fmt.Sprintf("Failed to create pipeline run: %v", err),
+		})
+		http.Error(w, "failed to create pipeline run", http.StatusInternalServerError)
+		return
+	}
+	log.Printf("[ROLLBACK] pipeline run created runID=%d service=%s env=%s\n", runID, serviceName, req.Environment)
+
 	// 🚀 Trigger rollback via CICD
 	switch cicdType {
 	case "jenkins":
-		log.Printf("[ROLLBACK] Triggering Jenkins rollback: service=%s env=%s version=%s\n",
-			serviceName, req.Environment, req.Version)
-		err = cicd.TriggerJenkinsRollback(serviceName, req.Environment, req.Version)
+		log.Printf("[ROLLBACK] Triggering Jenkins rollback: service=%s env=%s version=%s runID=%d\n",
+			serviceName, req.Environment, req.Version, runID)
+		err = cicd.TriggerJenkinsRollback(serviceName, req.Environment, req.Version, runID)
 
 	case "github":
-		log.Printf("[ROLLBACK] Triggering GitHub rollback: repo=%s env=%s version=%s\n",
-			repo, req.Environment, req.Version)
-		err = cicd.TriggerGitHubRollback(repo, req.Environment, req.Version)
+		log.Printf("[ROLLBACK] Triggering GitHub rollback: repo=%s env=%s version=%s runID=%d\n",
+			repo, req.Environment, req.Version, runID)
+		err = cicd.TriggerGitHubRollback(repo, req.Environment, req.Version, runID)
 
 	default:
 		log.Printf("[ROLLBACK][WARN] Unsupported CICD type: %s\n", cicdType)
@@ -176,22 +201,22 @@ func RollbackService(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err != nil {
-		log.Printf("[ROLLBACK][ERROR] CICD trigger failed: %v\n", err)
+		log.Printf("[ROLLBACK][ERROR] CICD trigger failed: runID=%d err=%v\n", runID, err)
 		audit.Log(r, audit.Entry{
 			Action:       "rollback",
 			ResourceType: "deployment",
 			ResourceName: serviceName,
 			Environment:  req.Environment,
 			Status:       "failed",
-			Details:      fmt.Sprintf("CICD trigger failed via %s: %v", cicdType, err),
+			Details:      fmt.Sprintf("CICD trigger failed via %s runID=%d: %v", cicdType, runID, err),
 		})
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
 	// ✅ Success
-	log.Printf("[ROLLBACK][SUCCESS] Rollback triggered: service=%s env=%s from=%s to=%s\n",
-		serviceName, req.Environment, currentVersion, req.Version)
+	log.Printf("[ROLLBACK][SUCCESS] Rollback triggered: service=%s env=%s from=%s to=%s runID=%d\n",
+		serviceName, req.Environment, currentVersion, req.Version, runID)
 
 	audit.Log(r, audit.Entry{
 		Action:       "rollback",
@@ -199,10 +224,14 @@ func RollbackService(w http.ResponseWriter, r *http.Request) {
 		ResourceName: serviceName,
 		Environment:  req.Environment,
 		Status:       "success",
-		Details: fmt.Sprintf("Rolled back from version=%s to version=%s via %s",
-			currentVersion, req.Version, cicdType),
+		Details: fmt.Sprintf("Rolled back from version=%s to version=%s via %s runID=%d",
+			currentVersion, req.Version, cicdType, runID),
 	})
 
+	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted)
-	w.Write([]byte(`{"message":"rollback triggered"}`))
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"message": "rollback triggered",
+		"runId":   runID,
+	})
 }

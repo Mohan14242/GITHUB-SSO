@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"src/src/internal/audit"
+	"src/src/internal/auth"
 	"src/src/internal/cicd"
 	"src/src/internal/db"
 )
@@ -70,7 +71,6 @@ func DeployServices(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// ✅ audit — prod deployment queued for approval
 		audit.Log(r, audit.Entry{
 			Action:       "deployment_triggered",
 			ResourceType: "deployment",
@@ -102,45 +102,64 @@ func DeployServices(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("[DEPLOY] cicdType=%s repo=%s", cicdType, repo)
 
+	// get actor for pipeline run
+	actor := "unknown"
+	if claims := auth.ClaimsFromContext(r.Context()); claims != nil {
+		actor = claims.GithubLogin
+	}
+
+	// 🏗️ Create pipeline run
+	runID, err := CreatePipelineRun(serviceName, req.Environment, actor, cicdType)
+	if err != nil {
+		log.Printf("[DEPLOY][ERROR] Failed to create pipeline run service=%s: %v", serviceName, err)
+		http.Error(w, "failed to create pipeline run", http.StatusInternalServerError)
+		return
+	}
+	log.Printf("[DEPLOY] pipeline run created runID=%d service=%s env=%s", runID, serviceName, req.Environment)
+
 	// 🚀 Trigger CICD
 	switch cicdType {
 	case "jenkins":
-		err = cicd.TriggerJenkinsDeploy(serviceName, branch)
+		err = cicd.TriggerJenkinsDeploy(serviceName, branch, runID)
 	case "github":
-		err = cicd.TriggerGitHubDeploy(repo, branch)
+		err = cicd.TriggerGitHubDeploy(repo, branch, runID)
 	default:
 		http.Error(w, "unsupported cicd type", http.StatusBadRequest)
 		return
 	}
 
 	if err != nil {
-		log.Printf("[DEPLOY][ERROR] CICD trigger failed service=%s: %v", serviceName, err)
+		log.Printf("[DEPLOY][ERROR] CICD trigger failed service=%s runID=%d: %v", serviceName, runID, err)
 
-		// ✅ audit — deployment failed to trigger
 		audit.Log(r, audit.Entry{
 			Action:       "deployment_triggered",
 			ResourceType: "deployment",
 			ResourceName: serviceName,
 			Environment:  req.Environment,
 			Status:       "failed",
-			Details:      fmt.Sprintf("CICD trigger failed cicdType=%s error=%s", cicdType, err.Error()),
+			Details:      fmt.Sprintf("CICD trigger failed cicdType=%s runID=%d error=%s", cicdType, runID, err.Error()),
 		})
 
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	// ✅ audit — deployment successfully triggered
 	audit.Log(r, audit.Entry{
 		Action:       "deployment_triggered",
 		ResourceType: "deployment",
 		ResourceName: serviceName,
 		Environment:  req.Environment,
 		Status:       "success",
-		Details:      fmt.Sprintf("Deployment triggered cicdType=%s repo=%s branch=%s", cicdType, repo, branch),
+		Details:      fmt.Sprintf("Deployment triggered cicdType=%s repo=%s branch=%s runID=%d", cicdType, repo, branch, runID),
 	})
 
-	log.Printf("[DEPLOY][SUCCESS] Deployment triggered service=%s environment=%s", serviceName, req.Environment)
+	log.Printf("[DEPLOY][SUCCESS] Deployment triggered service=%s environment=%s runID=%d",
+		serviceName, req.Environment, runID)
+
+	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted)
-	w.Write([]byte(`{"message":"deployment triggered"}`))
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"message": "deployment triggered",
+		"runId":   runID,
+	})
 }

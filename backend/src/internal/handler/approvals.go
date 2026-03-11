@@ -136,7 +136,7 @@ func ApproveDeployment(w http.ResponseWriter, r *http.Request) {
 		Details:      fmt.Sprintf("Deployment approved by %s for env=%s", actor, environment),
 	})
 
-	/* ===== Trigger CICD after approval ===== */
+	/* ===== Lookup CI/CD type before triggering ===== */
 	var cicdType, repo string
 	err = db.DB.QueryRow(`
 		SELECT cicd_type, repo_name FROM services WHERE service_name = ?
@@ -147,21 +147,31 @@ func ApproveDeployment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	/* ===== Create pipeline run ===== */
+	runID, err := CreatePipelineRun(serviceName, environment, actor, cicdType)
+	if err != nil {
+		log.Printf("[APPROVAL][ERROR] failed to create pipeline run service=%s env=%s: %v",
+			serviceName, environment, err)
+		http.Error(w, "failed to create pipeline run", http.StatusInternalServerError)
+		return
+	}
+	log.Printf("[APPROVAL] pipeline run created runID=%d service=%s env=%s", runID, serviceName, environment)
+
+	/* ===== Trigger CI/CD after approval ===== */
 	branch := "master"
-	log.Printf("[APPROVAL] Triggering prod deployment via %s", cicdType)
+	log.Printf("[APPROVAL] Triggering prod deployment via %s runID=%d", cicdType, runID)
 
 	switch cicdType {
 	case "jenkins":
-		err = cicd.TriggerJenkinsDeploy(serviceName, branch)
+		err = cicd.TriggerJenkinsDeploy(serviceName, branch, runID)
 	case "github":
-		err = cicd.TriggerGitHubDeploy(repo, branch)
+		err = cicd.TriggerGitHubDeploy(repo, branch, runID)
 	default:
 		http.Error(w, "unsupported cicd type", http.StatusBadRequest)
 		return
 	}
 
 	if err != nil {
-		// audit the failure too
 		audit.Log(r, audit.Entry{
 			Action:       "deployment_trigger_failed",
 			ResourceType: "deployment",
@@ -174,8 +184,12 @@ func ApproveDeployment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte(`{"message":"production deployment approved and triggered"}`))
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"message": "production deployment approved and triggered",
+		"runId":   runID,
+	})
 }
 
 /* ===================== REJECT ===================== */
