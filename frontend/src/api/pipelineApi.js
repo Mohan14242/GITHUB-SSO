@@ -18,19 +18,25 @@ export function streamPipelineRun(runId, { onStageUpdated, onRunUpdated, onCompl
   const url   = `/api/pipeline/${runId}/stream?token=${encodeURIComponent(token)}`
 
   const es = new EventSource(url)
+  let intentionalClose = false  // ← add this
 
-  es.addEventListener("run_snapshot",   e => onSnapshot?.(JSON.parse(e.data)))
-  es.addEventListener("stage_updated",  e => onStageUpdated?.(JSON.parse(e.data)))
-  es.addEventListener("run_updated",    e => onRunUpdated?.(JSON.parse(e.data)))
-  es.addEventListener("run_completed",  e => {
+  es.addEventListener("run_snapshot",  e => onSnapshot?.(JSON.parse(e.data)))
+  es.addEventListener("stage_updated", e => onStageUpdated?.(JSON.parse(e.data)))
+  es.addEventListener("run_updated",   e => onRunUpdated?.(JSON.parse(e.data)))
+  es.addEventListener("run_completed", e => {
+    intentionalClose = true      // ← mark before closing
     onCompleted?.(JSON.parse(e.data))
     es.close()
   })
 
   es.onerror = (err) => {
+    if (intentionalClose) return  // ← ignore close-triggered errors
     onError?.(err)
     es.close()
   }
 
-  return () => es.close() // cleanup function
+  return () => {
+    intentionalClose = true       // ← also mark when caller cleans up
+    es.close()
+  }
 }
