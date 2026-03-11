@@ -1,42 +1,320 @@
 import { useEffect, useState } from "react"
 import { fetchServices } from "../api/services"
+import { fetchServiceCreationRequests } from "../api/serviceCreationApi"
 import { useNavigate } from "react-router-dom"
 
 export default function ServicesList() {
   const [services, setServices] = useState([])
+  const [pending, setPending]   = useState([])
+  const [loading, setLoading]   = useState(true)
   const navigate = useNavigate()
 
-  useEffect(() => {
-    load()
-  }, [])
+  useEffect(() => { load() }, [])
 
   async function load() {
-    const data = await fetchServices()
-    setServices(data)
+    try {
+      setLoading(true)
+      const [svcData, reqData] = await Promise.allSettled([
+        fetchServices(),
+        fetchServiceCreationRequests("pending"),
+      ])
+      setServices(
+        svcData.status === "fulfilled" && Array.isArray(svcData.value)
+          ? svcData.value : []
+      )
+      setPending(
+        reqData.status === "fulfilled" && Array.isArray(reqData.value)
+          ? reqData.value : []
+      )
+    } catch (err) {
+      console.error("[ServicesList] load failed:", err)
+    } finally {
+      setLoading(false)
+    }
   }
 
-  return (
-    <div>
-      <h2>Services</h2>
+  if (loading) {
+    return (
+      <div style={{ padding: "40px 48px" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, color: "#475569", fontSize: 14 }}>
+          <div style={{
+            width: 16, height: 16, borderRadius: "50%",
+            border: "2px solid #1e293b", borderTop: "2px solid #6366f1",
+            animation: "spin 1s linear infinite",
+          }}/>
+          Loading services…
+        </div>
+        <style>{`@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
+      </div>
+    )
+  }
 
+  const totalCount = services.length + pending.length
+
+  return (
+    <div style={{ padding: "40px 48px", maxWidth: 900 }}>
+
+      {/* ── Header ── */}
+      <div style={{ marginBottom: 32 }}>
+        <span style={{
+          fontSize: 11, fontWeight: 700, letterSpacing: "0.15em",
+          textTransform: "uppercase", color: "#6366f1", fontFamily: "monospace",
+        }}>
+          Infrastructure
+        </span>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 6 }}>
+          <h2 style={{
+            color: "#f1f5f9", margin: 0,
+            fontFamily: "'Georgia', serif", fontSize: 28, fontWeight: 700,
+          }}>
+            Services
+          </h2>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            {pending.length > 0 && (
+              <span style={{
+                padding: "4px 12px", borderRadius: 20,
+                background: "#1a1200", border: "1px solid #f59e0b44",
+                color: "#f59e0b", fontSize: 12, fontWeight: 600,
+              }}>
+                ⏳ {pending.length} awaiting approval
+              </span>
+            )}
+            <span style={{
+              padding: "4px 12px", borderRadius: 20,
+              background: "#1e293b", border: "1px solid #334155",
+              color: "#64748b", fontSize: 12, fontFamily: "monospace",
+            }}>
+              {totalCount} total
+            </span>
+          </div>
+        </div>
+      </div>
+
+      {/* ── Empty state ── */}
+      {totalCount === 0 && (
+        <div style={{
+          textAlign: "center", padding: "80px 0",
+          border: "1px dashed #1e293b", borderRadius: 12,
+        }}>
+          <div style={{ fontSize: 40, marginBottom: 12 }}>⚙️</div>
+          <p style={{ color: "#334155", fontSize: 14, margin: 0 }}>
+            No services yet. Click "Create Service" to get started.
+          </p>
+        </div>
+      )}
+
+      {/* ── Pending approval cards ── */}
+      {pending.map((req) => (
+        <div
+          key={`pending-${req.id}`}
+          style={{ position: "relative", marginBottom: 12 }}
+        >
+          {/* Blurred card underneath */}
+          <div style={{
+            border: "1px solid #f59e0b44",
+            background: "#0f172a",
+            padding: "18px 20px",
+            borderRadius: 10,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            filter: "blur(2.5px)",
+            userSelect: "none",
+            pointerEvents: "none",
+          }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+              <div style={{
+                width: 36, height: 36, borderRadius: 8,
+                background: "#1e293b",
+                display: "flex", alignItems: "center",
+                justifyContent: "center", fontSize: 16, flexShrink: 0,
+              }}>
+                ⚙️
+              </div>
+              <div>
+                <strong style={{ color: "#f1f5f9", fontSize: 15 }}>
+                  {req.serviceName}
+                </strong>
+                <div style={{ color: "#475569", fontSize: 12, marginTop: 2 }}>
+                  Requested by {req.requestedBy}
+                </div>
+              </div>
+            </div>
+            <div style={{ display: "flex", gap: 8 }}>
+              {["dev", "test", "prod"].map(e => (
+                <span key={e} style={{
+                  padding: "3px 8px", borderRadius: 4,
+                  fontSize: 11, fontFamily: "monospace", fontWeight: 600,
+                  background: "#0f172a", border: "1px solid #1e293b",
+                  color: "#334155",
+                }}>
+                  {e}
+                </span>
+              ))}
+              <svg width="14" height="14" fill="none" stroke="#334155" strokeWidth="2" viewBox="0 0 24 24">
+                <path d="M9 18l6-6-6-6"/>
+              </svg>
+            </div>
+          </div>
+
+          {/* Overlay */}
+          <div style={{
+            position: "absolute",
+            inset: 0,
+            borderRadius: 10,
+            border: "1px solid #f59e0b55",
+            background: "rgba(10, 15, 26, 0.82)",
+            backdropFilter: "blur(3px)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            padding: "0 20px",
+          }}>
+            {/* Left — spinner + name */}
+            <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+              <div style={{
+                width: 20, height: 20, borderRadius: "50%",
+                border: "2px solid #f59e0b33",
+                borderTop: "2px solid #f59e0b",
+                animation: "spin 1s linear infinite",
+                flexShrink: 0,
+              }}/>
+              <div>
+                <div style={{ color: "#f1f5f9", fontWeight: 700, fontSize: 15 }}>
+                  {req.serviceName}
+                </div>
+                <div style={{
+                  color: "#f59e0b", fontSize: 12, marginTop: 2,
+                  display: "flex", alignItems: "center", gap: 5,
+                }}>
+                  <svg width="11" height="11" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                    <circle cx="12" cy="12" r="10"/>
+                    <path d="M12 6v6l4 2"/>
+                  </svg>
+                  Waiting for admin approval
+                </div>
+              </div>
+            </div>
+
+            {/* Right — badge + time */}
+            <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4 }}>
+              <span style={{
+                padding: "3px 10px", borderRadius: 20,
+                background: "#1a1200", border: "1px solid #f59e0b44",
+                color: "#f59e0b", fontSize: 10, fontWeight: 700,
+                letterSpacing: "0.08em", textTransform: "uppercase",
+              }}>
+                ● Pending Approval
+              </span>
+              <span style={{ color: "#475569", fontSize: 11 }}>
+                {new Date(req.createdAt).toLocaleString()}
+              </span>
+            </div>
+          </div>
+        </div>
+      ))}
+
+      {/* ── Ready services ── */}
       {services.map((svc) => (
         <div
           key={svc.serviceName}
-          onClick={() =>
-            navigate(`/services/${svc.serviceName}`)
-          }
+          onClick={() => navigate(`/services/${svc.serviceName}`)}
           style={{
-            border: "1px solid #ccc",
-            padding: 16,
+            border: "1px solid #1e293b",
+            background: "#0f172a",
+            padding: "18px 20px",
             marginBottom: 12,
-            borderRadius: 8,
+            borderRadius: 10,
             cursor: "pointer",
+            transition: "border-color 0.15s, background 0.15s",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+          }}
+          onMouseEnter={e => {
+            e.currentTarget.style.borderColor = "#6366f1"
+            e.currentTarget.style.background  = "#0d1424"
+          }}
+          onMouseLeave={e => {
+            e.currentTarget.style.borderColor = "#1e293b"
+            e.currentTarget.style.background  = "#0f172a"
           }}
         >
-          <strong>{svc.serviceName}</strong>
+          {/* Left — icon + name */}
+          <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+            <div style={{
+              width: 36, height: 36, borderRadius: 8,
+              background: "#1e293b",
+              display: "flex", alignItems: "center",
+              justifyContent: "center", fontSize: 16, flexShrink: 0,
+            }}>
+              ⚙️
+            </div>
+            <div>
+              <strong style={{ color: "#f1f5f9", fontSize: 15 }}>
+                {svc.serviceName}
+              </strong>
+              <div style={{ color: "#475569", fontSize: 12, marginTop: 2, display: "flex", alignItems: "center", gap: 6 }}>
+                {svc.ownerTeam && (
+                  <span>{svc.ownerTeam}</span>
+                )}
+                {svc.runtime && (
+                  <span style={{
+                    padding: "1px 6px", borderRadius: 4,
+                    background: "#1e293b", border: "1px solid #334155",
+                    color: "#64748b", fontSize: 11, fontFamily: "monospace",
+                  }}>
+                    {svc.runtime}
+                  </span>
+                )}
+                {svc.cicdType && (
+                  <span style={{
+                    padding: "1px 6px", borderRadius: 4,
+                    background: "#1e293b", border: "1px solid #334155",
+                    color: "#64748b", fontSize: 11, fontFamily: "monospace",
+                  }}>
+                    {svc.cicdType}
+                  </span>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* Right — env pills + arrow */}
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            {svc.environments && Object.entries(svc.environments).map(([env, status]) => (
+              <span key={env} style={{
+                padding: "3px 8px", borderRadius: 4,
+                fontSize: 11, fontFamily: "monospace", fontWeight: 600,
+                background: status === "success"
+                  ? "#001a0f"
+                  : status === "failed"
+                  ? "#1a0a0a"
+                  : "#0f172a",
+                border: `1px solid ${
+                  status === "success" ? "#10b98133"
+                  : status === "failed" ? "#e74c3c33"
+                  : "#1e293b"
+                }`,
+                color: status === "success"
+                  ? "#10b981"
+                  : status === "failed"
+                  ? "#e74c3c"
+                  : "#334155",
+              }}>
+                {env}
+              </span>
+            ))}
+            <svg width="14" height="14" fill="none" stroke="#334155" strokeWidth="2" viewBox="0 0 24 24">
+              <path d="M9 18l6-6-6-6"/>
+            </svg>
+          </div>
         </div>
       ))}
+
+      <style>{`
+        @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+      `}</style>
     </div>
   )
 }
-

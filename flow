@@ -116,10 +116,5 @@ Here is the **concise, production-grade LIST ONLY** of what needs to be created 
 * Change history
 * Access logs
 
----
 
-## 🏁 ONE-LINE SUMMARY
 
-> **After repo creation, the platform must create everything needed to run, secure, observe, own, and operate the service — automatically.**
-
-If you want the **same list grouped by DevOps / SRE / Platform ownership**, tell me 👍

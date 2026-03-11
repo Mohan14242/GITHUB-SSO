@@ -7,3 +7,15 @@ templateVersion: v1
 deploytype: microservice
 environments: [dev,test,prod]
 enableWebhook: true
+
+
+
+commands to add 
+
+eval "$(ssh-agent -s)" && ssh-add ../../platform
+
+
+platform.buyforu.run.place
+
+jenkins.buyforu.run.place
+

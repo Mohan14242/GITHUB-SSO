@@ -2,9 +2,12 @@ package handler
 
 import (
 	"encoding/json"
+	"fmt"
+	"log"
 	"net/http"
 	"strings"
-	"log"
+
+	"src/src/internal/audit"
 	"src/src/internal/cicd"
 	"src/src/internal/db"
 )
@@ -12,7 +15,6 @@ import (
 type DeployRequest struct {
 	Environment string `json:"environment"`
 }
-
 
 func DeployServices(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -27,7 +29,7 @@ func DeployServices(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	serviceName := parts[1]
-	log.Printf("[[deploying the serving]] %s ",serviceName)
+	log.Printf("[DEPLOY] Request received for service=%s", serviceName)
 
 	var req DeployRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -54,69 +56,91 @@ func DeployServices(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-
+	// ── prod → approval gate ──
 	if req.Environment == "prod" {
-		// Create approval request
 		_, err := db.DB.Exec(`
 			INSERT INTO deployment_approvals
-			(service_name, environment,status,created_at)
-			VALUES (?, ?, 'pending',NOW())
-		`,
-			serviceName,
-			req.Environment,
-		)
+			  (service_name, environment, status, created_at)
+			VALUES (?, ?, 'pending', NOW())
+		`, serviceName, req.Environment)
 
 		if err != nil {
-			http.Error(w, "failed to create approval", 500)
+			log.Printf("[DEPLOY][ERROR] Failed to create approval for service=%s: %v", serviceName, err)
+			http.Error(w, "failed to create approval", http.StatusInternalServerError)
 			return
 		}
 
+		// ✅ audit — prod deployment queued for approval
+		audit.Log(r, audit.Entry{
+			Action:       "deployment_triggered",
+			ResourceType: "deployment",
+			ResourceName: serviceName,
+			Environment:  "prod",
+			Status:       "pending",
+			Details:      fmt.Sprintf("Production deployment queued for approval service=%s", serviceName),
+		})
+
+		log.Printf("[DEPLOY] Prod deployment queued for approval service=%s", serviceName)
 		w.WriteHeader(http.StatusAccepted)
 		w.Write([]byte(`{"status":"pending_approval"}`))
 		return
 	}
 
-	log.Printf("[[deploying to the environment is %s]]",req.Environment)
-
-	log.Printf("getting the DB details")
-
+	log.Printf("[DEPLOY] Triggering deployment service=%s environment=%s branch=%s",
+		serviceName, req.Environment, branch)
 
 	// 🔍 Get CICD type & repo info
 	var cicdType, repo string
 	err := db.DB.QueryRow(`
-		SELECT cicd_type, repo_name
-		FROM services
-		WHERE service_name = ?`,
-		serviceName,
-	).Scan(&cicdType, &repo)
+		SELECT cicd_type, repo_name FROM services WHERE service_name = ?
+	`, serviceName).Scan(&cicdType, &repo)
 	if err != nil {
+		log.Printf("[DEPLOY][ERROR] Service not found service=%s: %v", serviceName, err)
 		http.Error(w, "service not found", http.StatusNotFound)
 		return
 	}
-	log.Printf("Selecting the pipeline type and triggering the deployment")
-	// 🚀 Trigger correct CICD
+
+	log.Printf("[DEPLOY] cicdType=%s repo=%s", cicdType, repo)
+
+	// 🚀 Trigger CICD
 	switch cicdType {
 	case "jenkins":
 		err = cicd.TriggerJenkinsDeploy(serviceName, branch)
-
 	case "github":
 		err = cicd.TriggerGitHubDeploy(repo, branch)
-
 	default:
 		http.Error(w, "unsupported cicd type", http.StatusBadRequest)
 		return
 	}
 
 	if err != nil {
+		log.Printf("[DEPLOY][ERROR] CICD trigger failed service=%s: %v", serviceName, err)
+
+		// ✅ audit — deployment failed to trigger
+		audit.Log(r, audit.Entry{
+			Action:       "deployment_triggered",
+			ResourceType: "deployment",
+			ResourceName: serviceName,
+			Environment:  req.Environment,
+			Status:       "failed",
+			Details:      fmt.Sprintf("CICD trigger failed cicdType=%s error=%s", cicdType, err.Error()),
+		})
+
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
+	// ✅ audit — deployment successfully triggered
+	audit.Log(r, audit.Entry{
+		Action:       "deployment_triggered",
+		ResourceType: "deployment",
+		ResourceName: serviceName,
+		Environment:  req.Environment,
+		Status:       "success",
+		Details:      fmt.Sprintf("Deployment triggered cicdType=%s repo=%s branch=%s", cicdType, repo, branch),
+	})
+
+	log.Printf("[DEPLOY][SUCCESS] Deployment triggered service=%s environment=%s", serviceName, req.Environment)
 	w.WriteHeader(http.StatusAccepted)
 	w.Write([]byte(`{"message":"deployment triggered"}`))
 }
-
-
-
-
-

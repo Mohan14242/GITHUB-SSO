@@ -8,6 +8,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/secretsmanager v1.29.0
 	github.com/go-git/go-git/v5 v5.11.0
 	github.com/go-sql-driver/mysql v1.8.1
+	github.com/golang-jwt/jwt/v5 v5.2.1
 	gopkg.in/yaml.v3 v3.0.1
 )
 

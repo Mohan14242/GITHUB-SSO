@@ -7,48 +7,61 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"os"
 	"strings"
 	"time"
+
 	"src/src/internal/aws"
-	"src/src/internal/git"
 )
 
 type GitHubClient struct {
 	Token string
+	Org   string
 }
 
-// ------------------------------------------------------------
-// Create GitHub client (token from AWS)
-// ------------------------------------------------------------
+// ── getOrg returns GITHUB_ORG from env ──────────────────────────
+func getOrg() (string, error) {
+	org := os.Getenv("GITHUB_ORG")
+	if org == "" {
+		log.Println("[GITHUB][ERROR] GITHUB_ORG environment variable is not set")
+		return "", fmt.Errorf("GITHUB_ORG environment variable is not set")
+	}
+	log.Printf("[GITHUB] org resolved: %s", org)
+	return org, nil
+}
+
+// ── NewGitHubClient creates a client with org + token ───────────
 func NewGitHubClient() (*GitHubClient, error) {
-	log.Println("[GITHUB][STEP 1] Fetching GitHub token from AWS Secrets Manager")
+	log.Println("[GITHUB][NEW-CLIENT] fetching GitHub token from AWS Secrets Manager")
 
 	token, err := aws.GetGitToken("git-token")
 	if err != nil {
-		log.Println("[GITHUB][ERROR] Failed to fetch GitHub token:", err)
+		log.Printf("[GITHUB][NEW-CLIENT][ERROR] failed to fetch GitHub token: %v", err)
+		return nil, err
+	}
+	if token == "" {
+		log.Println("[GITHUB][NEW-CLIENT][ERROR] GitHub token is empty")
+		return nil, fmt.Errorf("github token is empty")
+	}
+	log.Println("[GITHUB][NEW-CLIENT] ✅ GitHub token fetched successfully")
+
+	org, err := getOrg()
+	if err != nil {
+		log.Printf("[GITHUB][NEW-CLIENT][ERROR] failed to resolve org: %v", err)
 		return nil, err
 	}
 
-	if token == "" {
-		log.Println("[GITHUB][ERROR] GitHub token is EMPTY")
-		return nil, fmt.Errorf("github token is empty")
-	}
-
-	log.Println("[GITHUB][STEP 1] GitHub token fetched successfully")
-	return &GitHubClient{Token: token}, nil
+	log.Printf("[GITHUB][NEW-CLIENT] ✅ client ready org=%s", org)
+	return &GitHubClient{Token: token, Org: org}, nil
 }
 
-// ------------------------------------------------------------
-// CreateWebhook – WITH FULL DIAGNOSTIC LOGGING
-// ------------------------------------------------------------
-func (g *GitHubClient) CreateWebhook(owner, repo, webhookURL string) error {
+// ── CreateWebhook creates a webhook on an org repo ──────────────
+func (g *GitHubClient) CreateWebhook(repo, webhookURL string) error {
 	startTotal := time.Now()
 
-	log.Println("--------------------------------------------------")
-	log.Println("[GITHUB][STEP 2] Creating webhook")
-	log.Println("[GITHUB] Repo owner:", owner)
-	log.Println("[GITHUB] Repo name :", repo)
-	log.Println("[GITHUB] Webhook URL:", webhookURL)
+	log.Println("[GITHUB][CREATE-WEBHOOK] ──────────────────────────────────")
+	log.Printf("[GITHUB][CREATE-WEBHOOK] starting org=%s repo=%s webhookURL=%s",
+		g.Org, repo, webhookURL)
 
 	// 1️⃣ Build payload
 	payload := map[string]interface{}{
@@ -63,91 +76,96 @@ func (g *GitHubClient) CreateWebhook(owner, repo, webhookURL string) error {
 
 	body, err := json.Marshal(payload)
 	if err != nil {
-		log.Println("[GITHUB][ERROR] Failed to marshal webhook payload:", err)
-		return err
+		log.Printf("[GITHUB][CREATE-WEBHOOK][ERROR] failed to marshal payload: %v", err)
+		return fmt.Errorf("failed to marshal webhook payload: %w", err)
 	}
+	log.Printf("[GITHUB][CREATE-WEBHOOK] payload ready size=%d bytes", len(body))
 
-	log.Println("[GITHUB][STEP 3] Webhook payload created (size:", len(body), "bytes)")
-
-	// 2️⃣ Create HTTP request
-	url := fmt.Sprintf(
-		"https://api.github.com/repos/%s/%s/hooks",
-		owner,
-		repo,
-	)
+	// 2️⃣ Build request — always against org repo
+	url := fmt.Sprintf("https://api.github.com/repos/%s/%s/hooks", g.Org, repo)
+	log.Printf("[GITHUB][CREATE-WEBHOOK] POST %s", url)
 
 	req, err := http.NewRequest("POST", url, bytes.NewBuffer(body))
 	if err != nil {
-		log.Println("[GITHUB][ERROR] Failed to create HTTP request:", err)
-		return err
+		log.Printf("[GITHUB][CREATE-WEBHOOK][ERROR] failed to build request: %v", err)
+		return fmt.Errorf("failed to build webhook request: %w", err)
 	}
 
-	req.Header.Set("Authorization", "token "+g.Token)
-	req.Header.Set("Accept", "application/vnd.github+json")
-	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization",        "token "+g.Token)
+	req.Header.Set("Accept",               "application/vnd.github+json")
+	req.Header.Set("Content-Type",         "application/json")
+	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+	req.Header.Set("User-Agent",           "platform-backend")
 
-	log.Println("[GITHUB][STEP 4] HTTP request created")
-	log.Println("[GITHUB] POST", url)
-
-	// 3️⃣ Execute request
+	// 3️⃣ Execute
 	client := &http.Client{Timeout: 15 * time.Second}
-
 	startHTTP := time.Now()
-	resp, err := client.Do(req)
-	duration := time.Since(startHTTP)
 
+	resp, err := client.Do(req)
+	httpDuration := time.Since(startHTTP)
 	if err != nil {
-		log.Println("[GITHUB][ERROR] HTTP request failed:", err)
-		log.Println("[GITHUB] HTTP duration:", duration)
-		return err
+		log.Printf("[GITHUB][CREATE-WEBHOOK][ERROR] HTTP request failed duration=%s: %v",
+			httpDuration, err)
+		return fmt.Errorf("webhook HTTP request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
 	respBody, _ := io.ReadAll(resp.Body)
+	log.Printf("[GITHUB][CREATE-WEBHOOK] response status=%s duration=%s org=%s repo=%s",
+		resp.Status, httpDuration, g.Org, repo)
+	log.Printf("[GITHUB][CREATE-WEBHOOK] response body=%s",
+		strings.TrimSpace(string(respBody)))
 
-	log.Println("[GITHUB][STEP 5] HTTP response received")
-	log.Println("[GITHUB] Status   :", resp.Status)
-	log.Println("[GITHUB] Duration :", duration)
-	log.Println("[GITHUB] Body     :", strings.TrimSpace(string(respBody)))
+	// 4️⃣ Handle status codes explicitly
+	switch resp.StatusCode {
+	case http.StatusCreated:
+		log.Printf("[GITHUB][CREATE-WEBHOOK] ✅ webhook created successfully org=%s repo=%s totalTime=%s",
+			g.Org, repo, time.Since(startTotal))
+		log.Println("[GITHUB][CREATE-WEBHOOK] ──────────────────────────────────")
+		return nil
 
-	// 4️⃣ Handle errors explicitly
-	if resp.StatusCode == 401 {
-		log.Println("[GITHUB][ERROR] Unauthorized – token is invalid or expired")
+	case http.StatusUnprocessableEntity: // 422
+		log.Printf("[GITHUB][CREATE-WEBHOOK] ⚠️ webhook already exists or validation failed org=%s repo=%s",
+			g.Org, repo)
+		return nil // treat as success — idempotent
+
+	case http.StatusUnauthorized:
+		log.Printf("[GITHUB][CREATE-WEBHOOK][ERROR] 401 unauthorized — token invalid or expired org=%s repo=%s",
+			g.Org, repo)
+		return fmt.Errorf("github webhook: token is invalid or expired (401)")
+
+	case http.StatusForbidden:
+		log.Printf("[GITHUB][CREATE-WEBHOOK][ERROR] 403 forbidden — token missing admin:repo_hook scope org=%s repo=%s",
+			g.Org, repo)
+		return fmt.Errorf("github webhook: token missing admin:repo_hook permission (403)")
+
+	case http.StatusNotFound:
+		log.Printf("[GITHUB][CREATE-WEBHOOK][ERROR] 404 not found — repo does not exist in org org=%s repo=%s",
+			g.Org, repo)
+		return fmt.Errorf("github webhook: repo '%s' not found in org '%s' (404)", repo, g.Org)
+
+	default:
+		log.Printf("[GITHUB][CREATE-WEBHOOK][ERROR] unexpected status=%s org=%s repo=%s body=%s",
+			resp.Status, g.Org, repo, strings.TrimSpace(string(respBody)))
+		return fmt.Errorf("github webhook creation failed: status=%s org=%s repo=%s",
+			resp.Status, g.Org, repo)
 	}
-
-	if resp.StatusCode == 403 {
-		log.Println("[GITHUB][ERROR] Forbidden – missing permissions (admin:repo_hook)")
-	}
-
-	if resp.StatusCode == 404 {
-		log.Println("[GITHUB][ERROR] Repo not found – check owner/repo name")
-	}
-
-	if resp.StatusCode == 422 {
-		log.Println("[GITHUB][WARN] Webhook already exists OR validation failed")
-	}
-
-	if resp.StatusCode >= 300 {
-		return fmt.Errorf(
-			"github webhook creation failed: %s",
-			resp.Status,
-		)
-	}
-
-	log.Println("[GITHUB][SUCCESS] Webhook created successfully")
-	log.Println("[GITHUB] Total time:", time.Since(startTotal))
-	log.Println("--------------------------------------------------")
-
-	return nil
 }
 
-
-
-
+// ── TriggerGitHubDeploy dispatches a workflow on an org repo ────
 func TriggerGitHubDeploy(repo, branch string) error {
+	log.Printf("[GITHUB][DEPLOY] starting repo=%s branch=%s", repo, branch)
+
 	token, err := aws.GetGitToken("git-token")
 	if err != nil {
-		log.Println("[GITHUB][ERROR] Failed to fetch GitHub token:", err)
+		log.Printf("[GITHUB][DEPLOY][ERROR] failed to fetch GitHub token: %v", err)
+		return fmt.Errorf("failed to fetch github token: %w", err)
+	}
+	log.Println("[GITHUB][DEPLOY] ✅ token fetched")
+
+	org, err := getOrg()
+	if err != nil {
+		log.Printf("[GITHUB][DEPLOY][ERROR] failed to resolve org: %v", err)
 		return err
 	}
 
@@ -156,149 +174,144 @@ func TriggerGitHubDeploy(repo, branch string) error {
 	payload := map[string]interface{}{
 		"ref": branch,
 	}
-
 	body, err := json.Marshal(payload)
 	if err != nil {
-		return err
+		log.Printf("[GITHUB][DEPLOY][ERROR] failed to marshal payload: %v", err)
+		return fmt.Errorf("failed to marshal deploy payload: %w", err)
 	}
+	log.Printf("[GITHUB][DEPLOY] payload ready ref=%s", branch)
 
-	owner, err := git.GetAuthenticatedUser(token)
-	if err != nil {
-		return err
-	}
-
-	fmt.Println("Authenticated GitHub User:", owner)
-
-	req, err := http.NewRequest(
-		"POST",
-		fmt.Sprintf(
-			"https://api.github.com/repos/%s/%s/actions/workflows/%s/dispatches",
-			owner, repo, workflow,
-		),
-		bytes.NewBuffer(body),
+	url := fmt.Sprintf(
+		"https://api.github.com/repos/%s/%s/actions/workflows/%s/dispatches",
+		org, repo, workflow,
 	)
+	log.Printf("[GITHUB][DEPLOY] POST %s", url)
+
+	req, err := http.NewRequest("POST", url, bytes.NewBuffer(body))
 	if err != nil {
-		return err
+		log.Printf("[GITHUB][DEPLOY][ERROR] failed to build request: %v", err)
+		return fmt.Errorf("failed to build deploy request: %w", err)
 	}
 
-	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("Accept", "application/vnd.github+json")
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "platform-backend")
+	req.Header.Set("Authorization",        "Bearer "+token)
+	req.Header.Set("Accept",               "application/vnd.github+json")
+	req.Header.Set("Content-Type",         "application/json")
+	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+	req.Header.Set("User-Agent",           "platform-backend")
 
+	startHTTP := time.Now()
 	resp, err := http.DefaultClient.Do(req)
+	httpDuration := time.Since(startHTTP)
 	if err != nil {
-		return err
+		log.Printf("[GITHUB][DEPLOY][ERROR] HTTP request failed duration=%s: %v",
+			httpDuration, err)
+		return fmt.Errorf("deploy HTTP request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
+	log.Printf("[GITHUB][DEPLOY] response status=%s duration=%s org=%s repo=%s branch=%s",
+		resp.Status, httpDuration, org, repo, branch)
+
 	if resp.StatusCode != http.StatusNoContent {
 		bodyBytes, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("status: %s, body: %s", resp.Status, string(bodyBytes))
+		log.Printf("[GITHUB][DEPLOY][ERROR] dispatch rejected status=%s org=%s repo=%s body=%s",
+			resp.Status, org, repo, strings.TrimSpace(string(bodyBytes)))
+		return fmt.Errorf(
+			"github deploy dispatch failed: org=%s repo=%s status=%s body=%s",
+			org, repo, resp.Status, strings.TrimSpace(string(bodyBytes)),
+		)
 	}
 
+	log.Printf("[GITHUB][DEPLOY] ✅ workflow dispatched successfully org=%s repo=%s branch=%s",
+		org, repo, branch)
 	return nil
 }
 
-
+// ── TriggerGitHubRollback dispatches a rollback workflow ────────
 func TriggerGitHubRollback(repo, environment, version string) error {
-	log.Println("[GITHUB][ROLLBACK] Starting GitHub rollback trigger")
+	log.Printf("[GITHUB][ROLLBACK] starting repo=%s environment=%s version=%s",
+		repo, environment, version)
 
-	// 🔐 Fetch GitHub token
 	token, err := aws.GetGitToken("git-token")
 	if err != nil {
-		log.Printf("[GITHUB][ROLLBACK][ERROR] Failed to fetch GitHub token: %v\n", err)
+		log.Printf("[GITHUB][ROLLBACK][ERROR] failed to fetch GitHub token: %v", err)
+		return fmt.Errorf("failed to fetch github token: %w", err)
+	}
+	log.Println("[GITHUB][ROLLBACK] ✅ token fetched")
+
+	org, err := getOrg()
+	if err != nil {
+		log.Printf("[GITHUB][ROLLBACK][ERROR] failed to resolve org: %v", err)
 		return err
 	}
-	log.Println("[GITHUB][ROLLBACK] GitHub token fetched successfully")
 
-	workflow := "cicd.yaml" // same workflow, handles rollback via inputs
+	workflow := "cicd.yaml"
+	ref      := environmentBranch(environment)
 
-	ref := environmentBranch(environment)
-	log.Printf(
-		"[GITHUB][ROLLBACK] Using ref=%s for environment=%s\n",
-		ref,
-		environment,
-	)
+	log.Printf("[GITHUB][ROLLBACK] resolved ref=%s for environment=%s org=%s repo=%s",
+		ref, environment, org, repo)
 
 	payload := map[string]interface{}{
 		"ref": ref,
 		"inputs": map[string]string{
-			"rollback": "true",
+			"rollback":         "true",
 			"rollback_version": version,
 		},
 	}
-
 	body, err := json.Marshal(payload)
 	if err != nil {
-		log.Printf("[GITHUB][ROLLBACK][ERROR] Failed to marshal payload: %v\n", err)
-		return err
+		log.Printf("[GITHUB][ROLLBACK][ERROR] failed to marshal payload: %v", err)
+		return fmt.Errorf("failed to marshal rollback payload: %w", err)
 	}
-
-	log.Printf(
-		"[GITHUB][ROLLBACK] Dispatch payload: %s\n",
-		string(body),
-	)
-
-	owner, err := git.GetAuthenticatedUser(token)
-	if err != nil {
-		log.Printf("[GITHUB][ROLLBACK][ERROR] Failed to get authenticated GitHub user: %v\n", err)
-		return err
-	}
-
-	log.Printf("[GITHUB][ROLLBACK] Authenticated GitHub user: %s\n", owner)
+	log.Printf("[GITHUB][ROLLBACK] payload ready body=%s", string(body))
 
 	url := fmt.Sprintf(
 		"https://api.github.com/repos/%s/%s/actions/workflows/%s/dispatches",
-		owner,
-		repo,
-		workflow,
+		org, repo, workflow,
 	)
+	log.Printf("[GITHUB][ROLLBACK] POST %s", url)
 
-	log.Printf("[GITHUB][ROLLBACK] Dispatch URL: %s\n", url)
-
-	req, err := http.NewRequest(
-		"POST",
-		url,
-		bytes.NewBuffer(body),
-	)
+	req, err := http.NewRequest("POST", url, bytes.NewBuffer(body))
 	if err != nil {
-		log.Printf("[GITHUB][ROLLBACK][ERROR] Failed to create HTTP request: %v\n", err)
-		return err
+		log.Printf("[GITHUB][ROLLBACK][ERROR] failed to build request: %v", err)
+		return fmt.Errorf("failed to build rollback request: %w", err)
 	}
 
-	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("Accept", "application/vnd.github+json")
-	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization",        "Bearer "+token)
+	req.Header.Set("Accept",               "application/vnd.github+json")
+	req.Header.Set("Content-Type",         "application/json")
+	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+	req.Header.Set("User-Agent",           "platform-backend")
 
-	log.Println("[GITHUB][ROLLBACK] Sending request to GitHub")
-
+	startHTTP := time.Now()
 	resp, err := http.DefaultClient.Do(req)
+	httpDuration := time.Since(startHTTP)
 	if err != nil {
-		log.Printf("[GITHUB][ROLLBACK][ERROR] HTTP request failed: %v\n", err)
-		return err
+		log.Printf("[GITHUB][ROLLBACK][ERROR] HTTP request failed duration=%s: %v",
+			httpDuration, err)
+		return fmt.Errorf("rollback HTTP request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
-	log.Printf(
-		"[GITHUB][ROLLBACK] GitHub response status: %s (%d)\n",
-		resp.Status,
-		resp.StatusCode,
-	)
+	log.Printf("[GITHUB][ROLLBACK] response status=%s duration=%s org=%s repo=%s",
+		resp.Status, httpDuration, org, repo)
 
 	if resp.StatusCode != http.StatusNoContent {
-		log.Printf(
-			"[GITHUB][ROLLBACK][ERROR] GitHub rejected rollback trigger: status=%s\n",
-			resp.Status,
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		log.Printf("[GITHUB][ROLLBACK][ERROR] dispatch rejected status=%s org=%s repo=%s body=%s",
+			resp.Status, org, repo, strings.TrimSpace(string(bodyBytes)))
+		return fmt.Errorf(
+			"github rollback dispatch failed: org=%s repo=%s status=%s body=%s",
+			org, repo, resp.Status, strings.TrimSpace(string(bodyBytes)),
 		)
-		return fmt.Errorf("github rollback trigger failed: %s", resp.Status)
 	}
 
-	log.Println("[GITHUB][ROLLBACK][SUCCESS] GitHub rollback workflow dispatched successfully")
+	log.Printf("[GITHUB][ROLLBACK] ✅ rollback workflow dispatched successfully org=%s repo=%s environment=%s version=%s",
+		org, repo, environment, version)
 	return nil
 }
 
-
+// ── environmentBranch maps environment name to git branch ───────
 func environmentBranch(env string) string {
 	switch env {
 	case "dev":
@@ -308,6 +321,7 @@ func environmentBranch(env string) string {
 	case "prod":
 		return "master"
 	default:
+		log.Printf("[GITHUB] ⚠️ unknown environment=%s defaulting to master", env)
 		return "master"
 	}
 }

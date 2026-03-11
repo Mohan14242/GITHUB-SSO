@@ -3,12 +3,15 @@ package handler
 import (
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
+	"src/src/internal/audit"
+	"src/src/internal/auth"
 	"src/src/internal/cicd"
 	"src/src/internal/db"
 )
@@ -25,12 +28,6 @@ type Approval struct {
 }
 
 /* ===================== GET APPROVALS ===================== */
-/*
-Returns:
-- pending approvals
-- approved history
-- rejected history
-*/
 
 func GetApprovals(w http.ResponseWriter, r *http.Request) {
 	log.Println("[APPROVAL] Fetching approvals (pending + history)")
@@ -42,13 +39,7 @@ func GetApprovals(w http.ResponseWriter, r *http.Request) {
 	}
 
 	rows, err := db.DB.Query(`
-		SELECT
-			id,
-			service_name,
-			environment,
-			status,
-			created_at,
-			approved_at
+		SELECT id, service_name, environment, status, created_at, approved_at
 		FROM deployment_approvals
 		WHERE environment = ?
 		ORDER BY created_at DESC
@@ -62,16 +53,11 @@ func GetApprovals(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 
 	var approvals []Approval
-
 	for rows.Next() {
 		var a Approval
 		if err := rows.Scan(
-			&a.ID,
-			&a.ServiceName,
-			&a.Environment,
-			&a.Status,
-			&a.CreatedAt,
-			&a.ApprovedAt,
+			&a.ID, &a.ServiceName, &a.Environment,
+			&a.Status, &a.CreatedAt, &a.ApprovedAt,
 		); err != nil {
 			log.Println("[APPROVAL][ERROR]", err)
 			continue
@@ -94,6 +80,12 @@ func ApproveDeployment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// get actor for audit log
+	actor := "unknown"
+	if claims := auth.ClaimsFromContext(r.Context()); claims != nil {
+		actor = claims.GithubLogin
+	}
+
 	tx, err := db.DB.Begin()
 	if err != nil {
 		http.Error(w, "db error", http.StatusInternalServerError)
@@ -102,7 +94,6 @@ func ApproveDeployment(w http.ResponseWriter, r *http.Request) {
 	defer tx.Rollback()
 
 	var serviceName, environment string
-
 	err = tx.QueryRow(`
 		SELECT service_name, environment
 		FROM deployment_approvals
@@ -118,8 +109,7 @@ func ApproveDeployment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("[APPROVAL] Approving service=%s env=%s",
-		serviceName, environment)
+	log.Printf("[APPROVAL] Approving service=%s env=%s by=%s", serviceName, environment, actor)
 
 	_, err = tx.Exec(`
 		UPDATE deployment_approvals
@@ -136,13 +126,20 @@ func ApproveDeployment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	/* ===== Trigger CICD after approval ===== */
+	// ── Audit log ──
+	audit.Log(r, audit.Entry{
+		Action:       "deployment_approved",
+		ResourceType: "deployment",
+		ResourceName: serviceName,
+		Environment:  environment,
+		Status:       "success",
+		Details:      fmt.Sprintf("Deployment approved by %s for env=%s", actor, environment),
+	})
 
+	/* ===== Trigger CICD after approval ===== */
 	var cicdType, repo string
 	err = db.DB.QueryRow(`
-		SELECT cicd_type, repo_name
-		FROM services
-		WHERE service_name = ?
+		SELECT cicd_type, repo_name FROM services WHERE service_name = ?
 	`, serviceName).Scan(&cicdType, &repo)
 
 	if err != nil {
@@ -150,8 +147,7 @@ func ApproveDeployment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	branch := "master" // prod
-
+	branch := "master"
 	log.Printf("[APPROVAL] Triggering prod deployment via %s", cicdType)
 
 	switch cicdType {
@@ -165,6 +161,15 @@ func ApproveDeployment(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err != nil {
+		// audit the failure too
+		audit.Log(r, audit.Entry{
+			Action:       "deployment_trigger_failed",
+			ResourceType: "deployment",
+			ResourceName: serviceName,
+			Environment:  environment,
+			Status:       "failed",
+			Details:      fmt.Sprintf("CICD trigger failed after approval: %s", err.Error()),
+		})
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -184,6 +189,38 @@ func RejectDeployment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// get actor + optional reason from body
+	actor := "unknown"
+	if claims := auth.ClaimsFromContext(r.Context()); claims != nil {
+		actor = claims.GithubLogin
+	}
+
+	var body struct {
+		Reason string `json:"reason"`
+	}
+	json.NewDecoder(r.Body).Decode(&body)
+	reason := body.Reason
+	if reason == "" {
+		reason = "No reason provided"
+	}
+
+	// fetch service name before update for audit log
+	var serviceName, environment string
+	err = db.DB.QueryRow(`
+		SELECT service_name, environment
+		FROM deployment_approvals
+		WHERE id = ? AND status = 'pending'
+	`, id).Scan(&serviceName, &environment)
+
+	if err == sql.ErrNoRows {
+		http.Error(w, "approval not found or already processed", http.StatusNotFound)
+		return
+	}
+	if err != nil {
+		http.Error(w, "db error", http.StatusInternalServerError)
+		return
+	}
+
 	res, err := db.DB.Exec(`
 		UPDATE deployment_approvals
 		SET status='rejected', approved_at=NOW()
@@ -200,6 +237,19 @@ func RejectDeployment(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "approval not found or already processed", http.StatusNotFound)
 		return
 	}
+
+	log.Printf("[APPROVAL] Rejected service=%s env=%s by=%s reason=%s",
+		serviceName, environment, actor, reason)
+
+	// ── Audit log ──
+	audit.Log(r, audit.Entry{
+		Action:       "deployment_rejected",
+		ResourceType: "deployment",
+		ResourceName: serviceName,
+		Environment:  environment,
+		Status:       "rejected",
+		Details:      fmt.Sprintf("Rejected by %s. Reason: %s", actor, reason),
+	})
 
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte(`{"message":"production deployment rejected"}`))
