@@ -252,28 +252,37 @@ export default function ServiceDashboard() {
 
     try {
       // Step 1: trigger deployment
-      await deployService(serviceName, env)
+      const res = await deployService(serviceName, env)
 
-      // Step 2: wait for pipeline to register on backend
-      await new Promise(resolve => setTimeout(resolve, 2000))
+      let runId = res?.runID
 
-      // Step 3: poll for latest pipeline run
-      let runId = null
+      // Step 2: fallback if backend did not return runId
+      if (!runId) {
+        console.warn("runId not returned from deploy API, fetching latest pipeline")
 
-      for (let attempt = 0; attempt < 5; attempt++) {
-        const latest = await fetchLatestPipelineRun(serviceName, env).catch(() => null)
+        for (let attempt = 0; attempt < 5; attempt++) {
+          try {
+            const latest = await fetchLatestPipelineRun(serviceName, env)
 
-        if (latest?.id) {
-          runId = latest.id
-          break
+            if (latest?.id) {
+              runId = latest.id
+              break
+            }
+
+          } catch (err) {
+            console.warn("Pipeline not ready yet, retrying...", err)
+          }
+
+          // wait 2 seconds before retry
+          await new Promise(resolve => setTimeout(resolve, 2000))
         }
-
-        await new Promise(resolve => setTimeout(resolve, 2000))
       }
 
-      if (!runId) throw new Error("Pipeline run not found after deployment")
+      if (!runId) {
+        throw new Error("Pipeline run not found after deployment")
+      }
 
-      // Step 4: open pipeline view
+      // Step 3: open pipeline view
       setPipelineRunId(runId)
       setPipelineEnv(env)
       setShowPipeline(true)
@@ -286,7 +295,6 @@ export default function ServiceDashboard() {
       setDeploying(prev => ({ ...prev, [env]: false }))
     }
   }
-
   // ── View latest pipeline for env ──────────────────────────────
   const handleViewPipeline = async (env) => {
     try {
@@ -402,10 +410,10 @@ export default function ServiceDashboard() {
         gap: 10, marginBottom: 24,
         animation: "fadeUp 0.35s ease 0.08s both",
       }}>
-        <StatBox label="Environments" value={envs.length}                    color="#6366f1"/>
-        <StatBox label="Deployed"     value={deployedEnvs}                   color="#10b981"/>
-        <StatBox label="Template"     value={dashboard?.templateName ?? "—"} color="#f59e0b"/>
-        <StatBox label="Runtime"      value={dashboard?.runtime ?? "—"}      color="#06b6d4"/>
+        <StatBox label="Environments" value={envs.length}                            color="#6366f1"/>
+        <StatBox label="Deployed"     value={deployedEnvs}                           color="#10b981"/>
+        <StatBox label="Template"     value={dashboard?.templateName ?? "—"}         color="#f59e0b"/>
+        <StatBox label="Runtime"      value={dashboard?.runtime ?? "—"}              color="#06b6d4"/>
       </div>
 
       {/* ── Loading ── */}
@@ -437,8 +445,8 @@ export default function ServiceDashboard() {
             <div style={{
               display: "grid",
               gridTemplateColumns: showPipeline
-                ? "1fr"
-                : "repeat(auto-fill,minmax(290px,1fr))",
+                ? "1fr"                                    // single column when panel open
+                : "repeat(auto-fill,minmax(290px,1fr))",  // normal grid when closed
               gap: 14,
               transition: "grid-template-columns 0.3s ease",
             }}>
