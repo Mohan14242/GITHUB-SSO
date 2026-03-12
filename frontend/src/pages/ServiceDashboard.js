@@ -255,27 +255,34 @@ export default function ServiceDashboard() {
 
       console.log("DEPLOY RESPONSE:", res)
 
-      // Accept multiple response formats
       const runId = res?.runId ?? res?.id ?? res?.run_id
 
       if (runId) {
-        console.log("Opening pipeline viewer for run:", runId)
-
         setPipelineRunId(runId)
         setPipelineEnv(env)
         setShowPipeline(true)
         return
       }
 
-      // fallback if backend response doesn't include runId
-      const run = await fetchLatestPipelineRun(serviceName, env)
+      console.log("Waiting for pipeline run to appear...")
 
-      if (run?.id) {
-        console.log("Fallback run found:", run.id)
+      let run = null
 
-        setPipelineRunId(run.id)
-        setPipelineEnv(env)
-        setShowPipeline(true)
+      for (let i = 0; i < 5; i++) {
+        try {
+          run = await fetchLatestPipelineRun(serviceName, env)
+
+          if (run?.id) {
+            setPipelineRunId(run.id)
+            setPipelineEnv(env)
+            setShowPipeline(true)
+            return
+          }
+        } catch {
+          console.log("Pipeline not created yet...")
+        }
+
+        await new Promise(r => setTimeout(r, 1000))
       }
 
     } catch (err) {
@@ -285,7 +292,6 @@ export default function ServiceDashboard() {
       setDeploying(p => ({ ...p, [env]: false }))
     }
   }
-
   // ── View latest pipeline for env ──────────────────────────────
   const handleViewPipeline = async (env) => {
     try {

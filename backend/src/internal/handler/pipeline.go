@@ -303,7 +303,7 @@ func GetLatestPipelineRun(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "no pipeline runs found", http.StatusNotFound)
 		return
 	}
-
+    
 	log.Printf("[PIPELINE] GetLatestPipelineRun found runID=%d", runID)
 
 	run, err := loadRun(fmt.Sprintf("%d", runID))
