@@ -248,72 +248,51 @@ export default function ServiceDashboard() {
 
   // ── Deploy → open pipeline panel ─────────────────────────────
   const handleDeploy = async (env) => {
-    alert("Deploy button clicked for env: " + env)
-
-    setDeploying(p => ({ ...p, [env]: true }))
+    setDeploying(prev => ({ ...prev, [env]: true }))
 
     try {
-      alert("Calling deployService API...")
-
+      // Step 1: trigger deployment
       const res = await deployService(serviceName, env)
 
-      alert("Deploy API response received")
+      let runId = res?.runId
 
-      console.log("DEPLOY RESPONSE:", res)
-      alert("Deploy response: " + JSON.stringify(res))
+      // Step 2: fallback if backend did not return runId
+      if (!runId) {
+        console.warn("runId not returned from deploy API, fetching latest pipeline")
 
-      const runId = res?.runId ?? res?.id ?? res?.run_id
+        for (let attempt = 0; attempt < 5; attempt++) {
+          try {
+            const latest = await fetchLatestPipelineRun(serviceName, env)
 
-      alert("Extracted runId: " + runId)
-      if (runId) {
-        setDeploying(p => ({ ...p, [env]: false }))
+            if (latest?.id) {
+              runId = latest.id
+              break
+            }
 
-        setPipelineRunId(runId)
-        setPipelineEnv(env)
-        setShowPipeline(true)
-        return
-      }
-      alert("runId not returned → waiting for pipeline creation")
-
-      console.log("Waiting for pipeline run to appear...")
-
-      let run = null
-
-      for (let i = 0; i < 5; i++) {
-        alert("Checking pipeline attempt: " + (i + 1))
-
-        try {
-          run = await fetchLatestPipelineRun(serviceName, env)
-
-          alert("Pipeline fetch response: " + JSON.stringify(run))
-
-          if (run?.id) {
-            alert("Pipeline run detected → id: " + run.id)
-
-            setPipelineRunId(run.id)
-            setPipelineEnv(env)
-            setShowPipeline(true)
-            return
+          } catch (err) {
+            console.warn("Pipeline not ready yet, retrying...", err)
           }
 
-        } catch (err) {
-          console.log("Pipeline not created yet...")
-          alert("Pipeline not created yet")
+          // wait 2 seconds before retry
+          await new Promise(resolve => setTimeout(resolve, 2000))
         }
-
-        await new Promise(r => setTimeout(r, 1000))
       }
 
-      alert("Pipeline run was not detected after retries")
+      if (!runId) {
+        throw new Error("Pipeline run not found after deployment")
+      }
+
+      // Step 3: open pipeline view
+      setPipelineRunId(runId)
+      setPipelineEnv(env)
+      setShowPipeline(true)
 
     } catch (err) {
       console.error("Deploy failed:", err)
+      alert("Deployment failed. Check logs.")
 
-      alert("Deploy failed: " + err.message)
     } finally {
-      alert("Deploy process finished")
-
-      setDeploying(p => ({ ...p, [env]: false }))
+      setDeploying(prev => ({ ...prev, [env]: false }))
     }
   }
   // ── View latest pipeline for env ──────────────────────────────
