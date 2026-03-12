@@ -14,7 +14,7 @@ export async function fetchLatestPipelineRun(serviceName, environment) {
 
 // SSE — returns an EventSource and cleanup function
 export function streamPipelineRun(runId, { onStageUpdated, onRunUpdated, onCompleted, onSnapshot, onError }) {
-  const token = sessionStorage.getItem("token")
+  const token = sessionStorage.getItem("jwt_token")
   const url   = `/api/pipeline/${runId}/stream?token=${encodeURIComponent(token)}`
 
   const es = new EventSource(url)
