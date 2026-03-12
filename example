@@ -61,5 +61,19 @@ fetch("/api/pipeline/service/ordersloki/dev", {
 .then(console.log)
 
 
+// Run this in the browser console
+const token = sessionStorage.getItem("jwt_token") // or wherever your app stores it
+
+const res = await fetch("/api/deploy-services/ordersloki/deploy", {
+  method: "POST",
+  headers: {
+    "Content-Type": "application/json",
+    "Authorization": `Bearer ${token}`
+  },
+  body: JSON.stringify({ environment: "dev" })
+})
+
+const data = await res.json()
+console.log(data)
 
 
