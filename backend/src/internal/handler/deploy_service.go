@@ -115,8 +115,7 @@ func DeployServices(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to create pipeline run", http.StatusInternalServerError)
 		return
 	}
-	log.Printf("[DEPLOY] pipeline run created runID=%d service=%s env=%s", runID, serviceName, req.Environment)
-
+	log.Printf("[---------------------------------------------------------------------------] pipeline run created runID=%d service=%s env=%s", runID, serviceName, req.Environment)
 	// 🚀 Trigger CICD
 	switch cicdType {
 	case "jenkins":

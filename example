@@ -25,3 +25,41 @@ new EventSource("/api/pipeline/12/stream?token=" + sessionStorage.getItem("jwt_t
 new EventSource("/api/pipeline")
 curl -N http://platform.buyforu.run.place/api/pipeline/12/stream?token=177cab97b3b7b4f32f8b313e743993ed8adc7955ab0ce3576d5144d57981f229
 
+fetch("/api/pipeline/service/ordersloki/dev", {
+  headers: {
+    Authorization: "Bearer " + sessionStorage.getItem("jwt_token")
+  }
+})
+.then(r => r.json())
+.then(console.log)
+
+
+
+fetch("/api/pipeline/service/ordersloki/dev", {
+  headers: {
+    Authorization: "Bearer " + sessionStorage.getItem("jwt_token")
+  }
+})
+.then(r => r.json())
+.then(console.log)
+
+fetch("/api/pipeline/12", {
+  headers: {
+    Authorization: "Bearer " + sessionStorage.getItem("jwt_token")
+  }
+})
+.then(r => r.json())
+.then(console.log)
+
+
+fetch("/api/pipeline/service/ordersloki/dev", {
+  headers: {
+    Authorization: "Bearer " + sessionStorage.getItem("jwt_token")
+  }
+})
+.then(r => r.json())
+.then(console.log)
+
+
+
+
