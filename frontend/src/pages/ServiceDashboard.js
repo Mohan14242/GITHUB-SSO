@@ -248,47 +248,73 @@ export default function ServiceDashboard() {
 
   // ── Deploy → open pipeline panel ─────────────────────────────
   const handleDeploy = async (env) => {
+    alert("Deploy button clicked for env: " + env)
+
     setDeploying(p => ({ ...p, [env]: true }))
 
     try {
+      alert("Calling deployService API...")
+
       const res = await deployService(serviceName, env)
 
+      alert("Deploy API response received")
+
       console.log("DEPLOY RESPONSE:", res)
+      alert("Deploy response: " + JSON.stringify(res))
 
       const runId = res?.runId ?? res?.id ?? res?.run_id
 
+      alert("Extracted runId: " + runId)
+
       if (runId) {
+        alert("Pipeline runId found → opening pipeline UI")
+
         setPipelineRunId(runId)
         setPipelineEnv(env)
         setShowPipeline(true)
         return
       }
 
+      alert("runId not returned → waiting for pipeline creation")
+
       console.log("Waiting for pipeline run to appear...")
 
       let run = null
 
       for (let i = 0; i < 5; i++) {
+        alert("Checking pipeline attempt: " + (i + 1))
+
         try {
           run = await fetchLatestPipelineRun(serviceName, env)
 
+          alert("Pipeline fetch response: " + JSON.stringify(run))
+
           if (run?.id) {
+            alert("Pipeline run detected → id: " + run.id)
+
             setPipelineRunId(run.id)
             setPipelineEnv(env)
             setShowPipeline(true)
             return
           }
-        } catch {
+
+        } catch (err) {
           console.log("Pipeline not created yet...")
+          alert("Pipeline not created yet")
         }
 
         await new Promise(r => setTimeout(r, 1000))
       }
 
+      alert("Pipeline run was not detected after retries")
+
     } catch (err) {
       console.error("Deploy failed:", err)
-      alert("Failed to trigger deployment")
+
+      alert("Deploy failed: " + err.message)
     } finally {
+      alert("Deploy process finished")
+
       setDeploying(p => ({ ...p, [env]: false }))
     }
   }
