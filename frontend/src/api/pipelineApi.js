@@ -17,7 +17,7 @@ export function streamPipelineRun(runId, { onStageUpdated, onRunUpdated, onCompl
   const token = sessionStorage.getItem("jwt_token")
   const url   = `/api/pipeline/${runId}/stream?token=${encodeURIComponent(token)}`
 
-  const es = new EventSource(url)
+  const es = new EventSource(url, { withCredentials: true })
   let intentionalClose = false  // ← add this
 
   es.addEventListener("run_snapshot",  e => onSnapshot?.(JSON.parse(e.data)))
