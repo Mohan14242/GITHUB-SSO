@@ -4,7 +4,7 @@ import { fetchServiceDashboard, deployService } from "../api/services"
 import { fetchLatestPipelineRun } from "../api/pipelineApi"
 import PipelineView from "../components/PipelineView"
 
-const DEFAULT_ENVS = ["dev", "test", "prod"]
+const DEFAULT_ENVS    = ["dev", "test", "prod"]
 const POLL_INTERVAL_MS = 5000
 
 const ENV_CFG = {
@@ -29,15 +29,16 @@ function StatusBadge({ status }) {
       background: cfg.bg,
       border: `1px solid ${cfg.color}33`,
       color: cfg.color,
-      fontSize: 11, fontWeight: 700, letterSpacing: "0.05em",
-      textTransform: "uppercase",
+      fontSize: 11, fontWeight: 700,
+      letterSpacing: "0.05em", textTransform: "uppercase",
     }}>
       {cfg.dot && (
         <span style={{
           width: 6, height: 6, borderRadius: "50%",
           background: cfg.color,
-          animation: status === "deploying" ? "pulse 1.2s ease-in-out infinite" : "none",
-        }} />
+          animation: status === "deploying"
+            ? "pulse 1.2s ease-in-out infinite" : "none",
+        }}/>
       )}
       {cfg.label}
     </span>
@@ -45,70 +46,72 @@ function StatusBadge({ status }) {
 }
 
 function EnvCard({ env, data, deploying, onDeploy, onViewPipeline }) {
-  const cfg   = ENV_CFG[env] ?? { color: "#6366f1", bg: "#0d0f2e", label: env, icon: "📦" }
+  const cfg       = ENV_CFG[env] ?? { color: "#6366f1", bg: "#0d0f2e", label: env, icon: "📦" }
   const isLoading = deploying[env]
 
   return (
-    <div style={{
-      background: "#0a1020",
-      border: `1px solid ${cfg.color}22`,
-      borderRadius: 14,
-      padding: 24,
-      display: "flex", flexDirection: "column", gap: 16,
-      position: "relative", overflow: "hidden",
-      transition: "border-color 0.2s, box-shadow 0.2s",
-    }}
+    <div
+      style={{
+        background: "#0a1020",
+        border: `1px solid ${cfg.color}22`,
+        borderRadius: 14,
+        padding: 22,
+        display: "flex", flexDirection: "column", gap: 14,
+        position: "relative", overflow: "hidden",
+        transition: "border-color 0.2s, box-shadow 0.2s",
+      }}
       onMouseEnter={e => {
         e.currentTarget.style.borderColor = cfg.color + "55"
-        e.currentTarget.style.boxShadow   = `0 0 24px ${cfg.color}11`
+        e.currentTarget.style.boxShadow   = `0 0 20px ${cfg.color}11`
       }}
       onMouseLeave={e => {
         e.currentTarget.style.borderColor = cfg.color + "22"
         e.currentTarget.style.boxShadow   = "none"
       }}
     >
-      {/* Ambient glow top-right */}
+      {/* Ambient glow */}
       <div style={{
         position: "absolute", top: -30, right: -30,
         width: 100, height: 100, borderRadius: "50%",
         background: cfg.color + "0a", pointerEvents: "none",
-      }} />
+      }}/>
 
       {/* Env header */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <div style={{
-            width: 36, height: 36, borderRadius: 10,
-            background: cfg.bg,
-            border: `1px solid ${cfg.color}33`,
-            display: "flex", alignItems: "center", justifyContent: "center",
-            fontSize: 16,
+            width: 34, height: 34, borderRadius: 9,
+            background: cfg.bg, border: `1px solid ${cfg.color}33`,
+            display: "flex", alignItems: "center",
+            justifyContent: "center", fontSize: 15,
           }}>
             {cfg.icon}
           </div>
           <div>
             <div style={{
-              fontSize: 11, color: cfg.color, fontWeight: 700,
+              fontSize: 10, color: cfg.color, fontWeight: 700,
               letterSpacing: "0.12em", textTransform: "uppercase",
               fontFamily: "monospace",
             }}>
               {cfg.label}
             </div>
-            <div style={{ fontSize: 12, color: "#334155", fontFamily: "monospace" }}>
+            <div style={{ fontSize: 11, color: "#334155", fontFamily: "monospace" }}>
               {env}
             </div>
           </div>
         </div>
-        <StatusBadge status={data?.status ?? "not_deployed"} />
+        <StatusBadge status={data?.status ?? "not_deployed"}/>
       </div>
 
-      {/* Version row */}
+      {/* Current version */}
       <div style={{
-        background: "#060b12",
-        border: "1px solid #0f172a",
-        borderRadius: 8, padding: "10px 14px",
+        background: "#060b12", border: "1px solid #0f172a",
+        borderRadius: 7, padding: "9px 13px",
       }}>
-        <div style={{ fontSize: 10, color: "#334155", marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.1em" }}>
+        <div style={{
+          fontSize: 9, color: "#334155", marginBottom: 3,
+          textTransform: "uppercase", letterSpacing: "0.1em",
+        }}>
           Current Version
         </div>
         <div style={{
@@ -119,36 +122,35 @@ function EnvCard({ env, data, deploying, onDeploy, onViewPipeline }) {
         </div>
       </div>
 
-      {/* Meta */}
+      {/* Last deployed */}
       {data?.lastDeployedAt && (
-        <div style={{ fontSize: 11, color: "#334155", display: "flex", gap: 16 }}>
-          <span>🕐 {new Date(data.lastDeployedAt).toLocaleString()}</span>
+        <div style={{ fontSize: 11, color: "#334155" }}>
+          🕐 {new Date(data.lastDeployedAt).toLocaleString()}
         </div>
       )}
 
       {/* Actions */}
-      <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
+      <div style={{ display: "flex", gap: 8, marginTop: 2 }}>
         <button
           onClick={onDeploy}
           disabled={isLoading}
           style={{
-            flex: 1,
-            padding: "10px 0",
-            borderRadius: 8,
+            flex: 1, padding: "9px 0", borderRadius: 8,
             border: `1px solid ${cfg.color}44`,
             background: isLoading ? cfg.color + "11" : cfg.color + "22",
             color: isLoading ? cfg.color + "88" : cfg.color,
             fontWeight: 700, fontSize: 12,
             cursor: isLoading ? "not-allowed" : "pointer",
             transition: "all 0.15s",
-            display: "flex", alignItems: "center", justifyContent: "center", gap: 7,
+            display: "flex", alignItems: "center",
+            justifyContent: "center", gap: 7,
             letterSpacing: "0.05em",
           }}
           onMouseEnter={e => { if (!isLoading) e.currentTarget.style.background = cfg.color + "33" }}
           onMouseLeave={e => { if (!isLoading) e.currentTarget.style.background = cfg.color + "22" }}
         >
           {isLoading
-            ? <><Spinner color={cfg.color} /> Triggering...</>
+            ? <><Spinner color={cfg.color}/> Triggering…</>
             : <>▶ Deploy to {env.toUpperCase()}</>
           }
         </button>
@@ -157,17 +159,19 @@ function EnvCard({ env, data, deploying, onDeploy, onViewPipeline }) {
           onClick={onViewPipeline}
           title="View latest pipeline"
           style={{
-            padding: "10px 14px",
-            borderRadius: 8,
-            border: "1px solid #1e293b",
-            background: "#060b12",
-            color: "#475569",
-            fontWeight: 600, fontSize: 12,
-            cursor: "pointer",
-            transition: "all 0.15s",
+            padding: "9px 13px", borderRadius: 8,
+            border: "1px solid #1e293b", background: "#060b12",
+            color: "#475569", fontWeight: 600, fontSize: 12,
+            cursor: "pointer", transition: "all 0.15s",
           }}
-          onMouseEnter={e => { e.currentTarget.style.borderColor = "#334155"; e.currentTarget.style.color = "#94a3b8" }}
-          onMouseLeave={e => { e.currentTarget.style.borderColor = "#1e293b"; e.currentTarget.style.color = "#475569" }}
+          onMouseEnter={e => {
+            e.currentTarget.style.borderColor = "#334155"
+            e.currentTarget.style.color       = "#94a3b8"
+          }}
+          onMouseLeave={e => {
+            e.currentTarget.style.borderColor = "#1e293b"
+            e.currentTarget.style.color       = "#475569"
+          }}
         >
           ⚡
         </button>
@@ -185,75 +189,93 @@ function Spinner({ color = "#6366f1", size = 12 }) {
       display: "inline-block",
       animation: "spin 0.7s linear infinite",
       flexShrink: 0,
-    }} />
+    }}/>
   )
 }
 
 function StatBox({ label, value, color = "#6366f1" }) {
   return (
     <div style={{
-      background: "#0a1020",
-      border: "1px solid #0f172a",
-      borderRadius: 10, padding: "14px 18px",
+      background: "#0a1020", border: "1px solid #0f172a",
+      borderRadius: 10, padding: "13px 16px",
       display: "flex", flexDirection: "column", gap: 4,
     }}>
-      <div style={{ fontSize: 10, color: "#334155", textTransform: "uppercase", letterSpacing: "0.1em" }}>
+      <div style={{
+        fontSize: 9, color: "#334155",
+        textTransform: "uppercase", letterSpacing: "0.1em",
+      }}>
         {label}
       </div>
-      <div style={{ fontSize: 18, fontWeight: 800, color, fontFamily: "monospace" }}>
+      <div style={{
+        fontSize: 18, fontWeight: 800,
+        color, fontFamily: "monospace",
+      }}>
         {value ?? "—"}
       </div>
     </div>
   )
 }
 
+// ─────────────────────────────────────────────────────────────────
 export default function ServiceDashboard() {
   const { serviceName } = useParams()
 
-  const [dashboard,       setDashboard]       = useState(null)
-  const [deploying,       setDeploying]       = useState({})
-  const [loading,         setLoading]         = useState(true)
-  const [showPipeline,    setShowPipeline]    = useState(false)
-  const [pipelineRunId,   setPipelineRunId]   = useState(null)
-  const [pipelineEnv,     setPipelineEnv]     = useState(null)
-  const [lastUpdated,     setLastUpdated]     = useState(null)
+  const [dashboard,     setDashboard]     = useState(null)
+  const [deploying,     setDeploying]     = useState({})
+  const [loading,       setLoading]       = useState(true)
+  const [showPipeline,  setShowPipeline]  = useState(false)
+  const [pipelineRunId, setPipelineRunId] = useState(null)
+  const [pipelineEnv,   setPipelineEnv]   = useState(null)
+  const [lastUpdated,   setLastUpdated]   = useState(null)
 
-  // ── Load + poll ──────────────────────────────────
+  // ── Poll dashboard ────────────────────────────────────────────
   useEffect(() => {
-    let isMounted = true
+    let mounted = true
     async function load() {
       try {
         const data = await fetchServiceDashboard(serviceName)
-        if (isMounted) { setDashboard(data); setLastUpdated(new Date()) }
+        if (mounted) { setDashboard(data); setLastUpdated(new Date()) }
       } catch {
-        if (isMounted) setDashboard(null)
+        if (mounted) setDashboard(null)
       } finally {
-        if (isMounted) setLoading(false)
+        if (mounted) setLoading(false)
       }
     }
     load()
     const iv = setInterval(load, POLL_INTERVAL_MS)
-    return () => { isMounted = false; clearInterval(iv) }
+    return () => { mounted = false; clearInterval(iv) }
   }, [serviceName])
 
-  // ── Deploy ───────────────────────────────────────
+  // ── Deploy → open pipeline panel ─────────────────────────────
   const handleDeploy = async (env) => {
     setDeploying(p => ({ ...p, [env]: true }))
     try {
       const res = await deployService(serviceName, env)
+
+      // Primary: backend returns { message, runId }
       if (res?.runId) {
         setPipelineRunId(res.runId)
         setPipelineEnv(env)
         setShowPipeline(true)
+        return
       }
-    } catch {
+
+      // Fallback: runId missing, poll for latest run
+      const run = await fetchLatestPipelineRun(serviceName, env)
+      if (run?.id) {
+        setPipelineRunId(run.id)
+        setPipelineEnv(env)
+        setShowPipeline(true)
+      }
+    } catch (err) {
+      console.error("Deploy failed:", err)
       alert("Failed to trigger deployment")
     } finally {
       setDeploying(p => ({ ...p, [env]: false }))
     }
   }
 
-  // ── View latest pipeline for an env ─────────────
+  // ── View latest pipeline for env ──────────────────────────────
   const handleViewPipeline = async (env) => {
     try {
       const run = await fetchLatestPipelineRun(serviceName, env)
@@ -267,9 +289,17 @@ export default function ServiceDashboard() {
     }
   }
 
-  const envs        = dashboard?.environments ? Object.keys(dashboard.environments) : DEFAULT_ENVS
-  const deployedEnvs = envs.filter(e => dashboard?.environments?.[e]?.status === "deployed").length
-  const totalEnvs    = envs.length
+  const closePipeline = () => {
+    setShowPipeline(false)
+    setPipelineRunId(null)
+    setPipelineEnv(null)
+  }
+
+  const envs         = dashboard?.environments
+    ? Object.keys(dashboard.environments) : DEFAULT_ENVS
+  const deployedEnvs = envs.filter(e =>
+    dashboard?.environments?.[e]?.status === "deployed"
+  ).length
 
   return (
     <div style={{
@@ -277,25 +307,23 @@ export default function ServiceDashboard() {
       background: "#060b12",
       color: "#e2e8f0",
       fontFamily: "'DM Sans', sans-serif",
-      padding: "32px 36px",
+      padding: "28px 32px",
     }}>
-
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700;800&display=swap');
-        @keyframes spin  { from { transform: rotate(0deg) } to { transform: rotate(360deg) } }
-        @keyframes pulse { 0%,100% { opacity: 1 } 50% { opacity: 0.3 } }
-        @keyframes fadeUp {
-          from { opacity: 0; transform: translateY(12px) }
-          to   { opacity: 1; transform: translateY(0) }
-        }
+        @keyframes spin    { from { transform:rotate(0deg) } to { transform:rotate(360deg) } }
+        @keyframes pulse   { 0%,100% { opacity:1 } 50% { opacity:0.3 } }
+        @keyframes fadeUp  { from { opacity:0;transform:translateY(12px) } to { opacity:1;transform:translateY(0) } }
+        @keyframes slideIn { from { opacity:0;transform:translateX(24px) } to { opacity:1;transform:translateX(0) } }
       `}</style>
 
       {/* ── Back link ── */}
-      <div style={{ marginBottom: 28, animation: "fadeUp 0.4s ease both" }}>
+      <div style={{ marginBottom: 24, animation: "fadeUp 0.35s ease both" }}>
         <Link to="/" style={{
           color: "#334155", fontSize: 12, fontWeight: 600,
-          textDecoration: "none", display: "inline-flex", alignItems: "center", gap: 6,
-          padding: "6px 12px", borderRadius: 7,
+          textDecoration: "none",
+          display: "inline-flex", alignItems: "center", gap: 6,
+          padding: "5px 11px", borderRadius: 7,
           border: "1px solid #0f172a", background: "#0a1020",
           transition: "all 0.15s",
         }}
@@ -308,26 +336,27 @@ export default function ServiceDashboard() {
 
       {/* ── Header ── */}
       <div style={{
-        marginBottom: 32,
-        display: "flex", alignItems: "flex-start", justifyContent: "space-between",
-        animation: "fadeUp 0.4s ease 0.05s both",
+        marginBottom: 28,
+        display: "flex", alignItems: "flex-start",
+        justifyContent: "space-between",
+        animation: "fadeUp 0.35s ease 0.05s both",
       }}>
         <div>
           <div style={{
             fontSize: 10, color: "#6366f1", fontWeight: 700,
             letterSpacing: "0.2em", textTransform: "uppercase",
-            fontFamily: "monospace", marginBottom: 8,
+            fontFamily: "monospace", marginBottom: 6,
           }}>
             Service Dashboard
           </div>
           <h1 style={{
-            margin: 0, fontSize: 28, fontWeight: 800,
+            margin: 0, fontSize: 26, fontWeight: 800,
             color: "#f1f5f9", letterSpacing: "-0.02em",
           }}>
             {serviceName}
           </h1>
           {dashboard?.description && (
-            <p style={{ margin: "6px 0 0", color: "#475569", fontSize: 13 }}>
+            <p style={{ margin: "5px 0 0", color: "#475569", fontSize: 13 }}>
               {dashboard.description}
             </p>
           )}
@@ -335,79 +364,112 @@ export default function ServiceDashboard() {
 
         {/* Live indicator */}
         <div style={{
-          display: "flex", alignItems: "center", gap: 8,
-          padding: "8px 14px", borderRadius: 20,
+          display: "flex", alignItems: "center", gap: 7,
+          padding: "7px 13px", borderRadius: 20,
           background: "#0a1020", border: "1px solid #0f172a",
           fontSize: 11, color: "#334155",
         }}>
           <span style={{
             width: 6, height: 6, borderRadius: "50%",
-            background: "#10b981",
+            background: "#10b981", display: "inline-block",
             animation: "pulse 2s ease-in-out infinite",
-            display: "inline-block",
-          }} />
-          Live · refreshes every {POLL_INTERVAL_MS / 1000}s
+          }}/>
+          Live · {POLL_INTERVAL_MS / 1000}s refresh
           {lastUpdated && (
-            <span style={{ color: "#1e293b", marginLeft: 4 }}>
+            <span style={{ color: "#1e293b", marginLeft: 3 }}>
               · {lastUpdated.toLocaleTimeString()}
             </span>
           )}
         </div>
       </div>
 
-      {/* ── Stat row ── */}
+      {/* ── Stats row ── */}
       <div style={{
-        display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12,
-        marginBottom: 28,
-        animation: "fadeUp 0.4s ease 0.1s both",
+        display: "grid",
+        gridTemplateColumns: "repeat(4,1fr)",
+        gap: 10, marginBottom: 24,
+        animation: "fadeUp 0.35s ease 0.08s both",
       }}>
-        <StatBox label="Environments"  value={totalEnvs}    color="#6366f1" />
-        <StatBox label="Deployed"      value={deployedEnvs} color="#10b981" />
-        <StatBox label="Template"      value={dashboard?.templateName ?? "—"} color="#f59e0b" />
-        <StatBox label="Runtime"       value={dashboard?.runtime ?? "—"}      color="#06b6d4" />
+        <StatBox label="Environments" value={envs.length}                            color="#6366f1"/>
+        <StatBox label="Deployed"     value={deployedEnvs}                           color="#10b981"/>
+        <StatBox label="Template"     value={dashboard?.templateName ?? "—"}         color="#f59e0b"/>
+        <StatBox label="Runtime"      value={dashboard?.runtime ?? "—"}              color="#06b6d4"/>
       </div>
 
       {/* ── Loading ── */}
       {loading && (
         <div style={{
-          display: "flex", alignItems: "center", gap: 12,
+          display: "flex", alignItems: "center", gap: 10,
           color: "#334155", padding: "60px 0",
-          animation: "fadeUp 0.3s ease both",
         }}>
-          <Spinner color="#6366f1" size={16} />
+          <Spinner color="#6366f1" size={16}/>
           Loading {serviceName} dashboard…
         </div>
       )}
 
-      {/* ── Env cards ── */}
+      {/* ── Main content: env cards + pipeline panel side by side ── */}
       {!loading && (
         <div style={{
-          display: "grid",
-          gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))",
+          display: "flex",
           gap: 16,
-          animation: "fadeUp 0.4s ease 0.15s both",
+          alignItems: "flex-start",
+          animation: "fadeUp 0.35s ease 0.12s both",
         }}>
-          {envs.map(env => (
-            <EnvCard
-              key={env}
-              env={env}
-              data={dashboard?.environments?.[env]}
-              deploying={deploying}
-              onDeploy={() => handleDeploy(env)}
-              onViewPipeline={() => handleViewPipeline(env)}
-            />
-          ))}
+
+          {/* Env cards grid — shrinks when pipeline is open */}
+          <div style={{
+            flex: showPipeline ? "0 0 auto" : "1 1 auto",
+            width: showPipeline ? "min(340px, 42%)" : "100%",
+            transition: "width 0.3s ease",
+          }}>
+            <div style={{
+              display: "grid",
+              gridTemplateColumns: showPipeline
+                ? "1fr"                                    // single column when panel open
+                : "repeat(auto-fill,minmax(290px,1fr))",  // normal grid when closed
+              gap: 14,
+              transition: "grid-template-columns 0.3s ease",
+            }}>
+              {envs.map(env => (
+                <EnvCard
+                  key={env}
+                  env={env}
+                  data={dashboard?.environments?.[env]}
+                  deploying={deploying}
+                  onDeploy={() => handleDeploy(env)}
+                  onViewPipeline={() => handleViewPipeline(env)}
+                />
+              ))}
+            </div>
+          </div>
+
+          {/* Pipeline panel — slides in from the right */}
+          {showPipeline && pipelineRunId && (
+            <div style={{
+              flex: "1 1 auto",
+              minWidth: 0,
+              height: "calc(100vh - 260px)",
+              minHeight: 480,
+              animation: "slideIn 0.25s ease both",
+              position: "sticky",
+              top: 28,
+            }}>
+              <PipelineView
+                runId={pipelineRunId}
+                serviceName={serviceName}
+                environment={pipelineEnv}
+                onClose={closePipeline}
+              />
+            </div>
+          )}
         </div>
       )}
 
       {/* ── Empty state ── */}
-      {!loading && !dashboard && (
-        <div style={{
-          textAlign: "center", padding: "80px 0",
-          animation: "fadeUp 0.4s ease both",
-        }}>
-          <div style={{ fontSize: 48, marginBottom: 16 }}>📦</div>
-          <div style={{ color: "#475569", fontWeight: 700, fontSize: 15, marginBottom: 8 }}>
+      {!loading && !dashboard && !showPipeline && (
+        <div style={{ textAlign: "center", padding: "80px 0" }}>
+          <div style={{ fontSize: 48, marginBottom: 14 }}>📦</div>
+          <div style={{ color: "#475569", fontWeight: 700, fontSize: 15, marginBottom: 6 }}>
             Service not deployed yet
           </div>
           <div style={{ color: "#334155", fontSize: 13 }}>
@@ -416,22 +478,18 @@ export default function ServiceDashboard() {
         </div>
       )}
 
-      {/* ── Artifacts table ── */}
+      {/* ── Artifacts / Recent deployments ── */}
       {!loading && dashboard?.artifacts?.length > 0 && (
-        <div style={{
-          marginTop: 32,
-          animation: "fadeUp 0.4s ease 0.2s both",
-        }}>
+        <div style={{ marginTop: 28 }}>
           <div style={{
             fontSize: 10, color: "#334155", fontWeight: 700,
             letterSpacing: "0.15em", textTransform: "uppercase",
-            marginBottom: 12, fontFamily: "monospace",
+            marginBottom: 10, fontFamily: "monospace",
           }}>
             Recent Deployments
           </div>
           <div style={{
-            background: "#0a1020",
-            border: "1px solid #0f172a",
+            background: "#0a1020", border: "1px solid #0f172a",
             borderRadius: 12, overflow: "hidden",
           }}>
             <table style={{ width: "100%", borderCollapse: "collapse" }}>
@@ -439,8 +497,8 @@ export default function ServiceDashboard() {
                 <tr style={{ borderBottom: "1px solid #0f172a" }}>
                   {["Version", "Environment", "Action", "Status", "Time"].map(h => (
                     <th key={h} style={{
-                      padding: "10px 16px", textAlign: "left",
-                      fontSize: 10, color: "#334155", fontWeight: 700,
+                      padding: "9px 14px", textAlign: "left",
+                      fontSize: 9, color: "#334155", fontWeight: 700,
                       letterSpacing: "0.1em", textTransform: "uppercase",
                     }}>
                       {h}
@@ -450,17 +508,15 @@ export default function ServiceDashboard() {
               </thead>
               <tbody>
                 {dashboard.artifacts.slice(0, 8).map((a, i) => (
-                  <tr key={i} style={{
-                    borderBottom: "1px solid #0a1020",
-                    transition: "background 0.15s",
-                  }}
+                  <tr key={i}
+                    style={{ borderBottom: "1px solid #0a1020", transition: "background 0.15s" }}
                     onMouseEnter={e => e.currentTarget.style.background = "#060b12"}
                     onMouseLeave={e => e.currentTarget.style.background = "transparent"}
                   >
-                    <td style={{ padding: "10px 16px", fontFamily: "monospace", fontSize: 11, color: "#94a3b8" }}>
+                    <td style={{ padding: "9px 14px", fontFamily: "monospace", fontSize: 11, color: "#94a3b8" }}>
                       {a.version}
                     </td>
-                    <td style={{ padding: "10px 16px" }}>
+                    <td style={{ padding: "9px 14px" }}>
                       <span style={{
                         fontSize: 11, fontWeight: 700,
                         color: ENV_CFG[a.environment]?.color ?? "#94a3b8",
@@ -469,13 +525,13 @@ export default function ServiceDashboard() {
                         {a.environment}
                       </span>
                     </td>
-                    <td style={{ padding: "10px 16px", fontSize: 11, color: "#475569", textTransform: "capitalize" }}>
+                    <td style={{ padding: "9px 14px", fontSize: 11, color: "#475569", textTransform: "capitalize" }}>
                       {a.action}
                     </td>
-                    <td style={{ padding: "10px 16px" }}>
-                      <StatusBadge status={a.status} />
+                    <td style={{ padding: "9px 14px" }}>
+                      <StatusBadge status={a.status}/>
                     </td>
-                    <td style={{ padding: "10px 16px", fontSize: 11, color: "#334155", fontFamily: "monospace" }}>
+                    <td style={{ padding: "9px 14px", fontSize: 11, color: "#334155", fontFamily: "monospace" }}>
                       {a.createdAt ? new Date(a.createdAt).toLocaleString() : "—"}
                     </td>
                   </tr>
@@ -484,16 +540,6 @@ export default function ServiceDashboard() {
             </table>
           </div>
         </div>
-      )}
-
-      {/* ── Pipeline modal ── */}
-      {showPipeline && pipelineRunId && (
-        <PipelineView
-          runId={pipelineRunId}
-          serviceName={serviceName}
-          environment={pipelineEnv}
-          onClose={() => setShowPipeline(false)}
-        />
       )}
     </div>
   )

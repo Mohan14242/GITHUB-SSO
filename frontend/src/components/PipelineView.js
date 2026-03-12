@@ -14,11 +14,11 @@ const STAGE_ICONS = {
 }
 
 const STATUS_CFG = {
-  pending:  { color: "#475569", bg: "#0f172a", border: "#1e293b",  label: "Pending",  icon: "○", pulse: false },
-  running:  { color: "#f59e0b", bg: "#1a1000", border: "#f59e0b55",label: "Running",  icon: "◐", pulse: true  },
-  success:  { color: "#10b981", bg: "#001a0f", border: "#10b98155",label: "Success",  icon: "✓", pulse: false },
-  failed:   { color: "#e74c3c", bg: "#1a0a0a", border: "#e74c3c55",label: "Failed",   icon: "✗", pulse: false },
-  skipped:  { color: "#64748b", bg: "#0f172a", border: "#33415544",label: "Skipped",  icon: "–", pulse: false },
+  pending:  { color: "#475569", bg: "#0f172a", border: "#1e293b",   label: "Pending", icon: "○", pulse: false },
+  running:  { color: "#f59e0b", bg: "#1a1000", border: "#f59e0b55", label: "Running", icon: "◐", pulse: true  },
+  success:  { color: "#10b981", bg: "#001a0f", border: "#10b98155", label: "Success", icon: "✓", pulse: false },
+  failed:   { color: "#e74c3c", bg: "#1a0a0a", border: "#e74c3c55", label: "Failed",  icon: "✗", pulse: false },
+  skipped:  { color: "#64748b", bg: "#0f172a", border: "#33415544", label: "Skipped", icon: "–", pulse: false },
 }
 
 const RUN_STATUS_CFG = {
@@ -40,13 +40,12 @@ function formatDuration(startedAt, completedAt) {
 }
 
 export default function PipelineView({ runId, serviceName, environment, onClose }) {
-  const [run, setRun]               = useState(null)
-  const [loading, setLoading]       = useState(true)
-  const [sseStatus, setSseStatus]   = useState("connecting") // connecting|live|completed|error
+  const [run,         setRun]         = useState(null)
+  const [loading,     setLoading]     = useState(true)
+  const [sseStatus,   setSseStatus]   = useState("connecting") // connecting|live|completed|error
   const [expandedLog, setExpandedLog] = useState(null)
-  const [elapsed, setElapsed]       = useState(null)
-  const cleanupRef                  = useRef(null)
-  const timerRef                    = useRef(null)
+  const cleanupRef                    = useRef(null)
+  const timerRef                      = useRef(null)
 
   // ── Elapsed timer ─────────────────────────────────────────────
   useEffect(() => {
@@ -65,43 +64,52 @@ export default function PipelineView({ runId, serviceName, environment, onClose 
 
     const cleanup = streamPipelineRun(runId, {
 
-      // Initial full snapshot from server
-      onSnapshot: (data) => {
-        setRun(data.payload ?? data)
+      // Backend sends: { type: "run_snapshot", payload: <PipelineRun> }
+      // ✅ FIX: unwrap .payload from the SSE envelope
+      onSnapshot: (event) => {
+        const data = event.payload ?? event
+        setRun(data)
         setLoading(false)
         setSseStatus("live")
       },
 
-      // Individual stage updated
-      onStageUpdated: (payload) => {
+      // Backend sends: { type: "stage_updated", payload: <StagePayload> }
+      // ✅ FIX: was using `payload.stageName` directly — always undefined
+      //         because the full envelope { type, payload } was passed in
+      onStageUpdated: (event) => {
+        const stage = event.payload ?? event
         setRun(prev => {
           if (!prev) return prev
           return {
             ...prev,
             stages: prev.stages.map(s =>
-              s.stageName === payload.stageName
-                ? { ...s, ...payload }
+              s.stageName === stage.stageName
+                ? { ...s, ...stage }
                 : s
             ),
           }
         })
       },
 
-      // Overall run status updated
-      onRunUpdated: (payload) => {
+      // Backend sends: { type: "run_updated", payload: <RunPayload> }
+      // ✅ FIX: unwrap .payload so status/completedAt are accessible
+      onRunUpdated: (event) => {
+        const data = event.payload ?? event
         setRun(prev => prev ? {
           ...prev,
-          status:      payload.status,
-          completedAt: payload.completedAt,
+          status:      data.status,
+          completedAt: data.completedAt,
         } : prev)
       },
 
-      // Run finished — SSE closes automatically
-      onCompleted: (payload) => {
+      // Backend sends: { type: "run_completed", payload: <RunPayload> }
+      // ✅ FIX: unwrap .payload so status/completedAt are accessible
+      onCompleted: (event) => {
+        const data = event.payload ?? event
         setRun(prev => prev ? {
           ...prev,
-          status:      payload.status,
-          completedAt: payload.completedAt,
+          status:      data.status,
+          completedAt: data.completedAt,
         } : prev)
         setSseStatus("completed")
         clearInterval(timerRef.current)
@@ -121,7 +129,7 @@ export default function PipelineView({ runId, serviceName, environment, onClose 
     return () => { cleanup(); clearInterval(timerRef.current) }
   }, [runId])
 
-  const runCfg = run ? (RUN_STATUS_CFG[run.status] ?? RUN_STATUS_CFG.pending) : null
+  const runCfg       = run ? (RUN_STATUS_CFG[run.status] ?? RUN_STATUS_CFG.pending) : null
   const successCount = run?.stages?.filter(s => s.status === "success").length ?? 0
   const totalCount   = run?.stages?.length ?? 0
   const progressPct  = totalCount > 0 ? (successCount / totalCount) * 100 : 0
@@ -181,9 +189,9 @@ export default function PipelineView({ runId, serviceName, environment, onClose 
                   background: "currentColor",
                   animation: sseStatus === "live" ? "pulse 1.5s ease-in-out infinite" : "none",
                 }}/>
-                {sseStatus === "live"        ? "LIVE"
-                : sseStatus === "completed"  ? "DONE"
-                : sseStatus === "error"      ? "FALLBACK"
+                {sseStatus === "live"       ? "LIVE"
+                : sseStatus === "completed" ? "DONE"
+                : sseStatus === "error"     ? "FALLBACK"
                 : "CONNECTING"}
               </span>
             </div>
@@ -289,9 +297,9 @@ export default function PipelineView({ runId, serviceName, environment, onClose 
               {/* Stage timeline */}
               <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>
                 {run.stages.map((stage, idx) => {
-                  const cfg        = STATUS_CFG[stage.status] ?? STATUS_CFG.pending
-                  const isExpanded = expandedLog === stage.id
-                  const hasLogs    = !!stage.logs
+                  const cfg         = STATUS_CFG[stage.status] ?? STATUS_CFG.pending
+                  const isExpanded  = expandedLog === stage.id
+                  const hasLogs     = !!stage.logs
                   const prevSuccess = idx > 0 && run.stages[idx - 1].status === "success"
 
                   return (
