@@ -249,26 +249,35 @@ export default function ServiceDashboard() {
   // ── Deploy → open pipeline panel ─────────────────────────────
   const handleDeploy = async (env) => {
     setDeploying(p => ({ ...p, [env]: true }))
+
     try {
       const res = await deployService(serviceName, env)
-      console.log("deploy response:", res)        // ← add this
-      console.log("runId:", res?.runId)
 
-      // Primary: backend returns { message, runId }
-      if (res?.runId) {
-        setPipelineRunId(res.runId)
+      console.log("DEPLOY RESPONSE:", res)
+
+      // Accept multiple response formats
+      const runId = res?.runId ?? res?.id ?? res?.run_id
+
+      if (runId) {
+        console.log("Opening pipeline viewer for run:", runId)
+
+        setPipelineRunId(runId)
         setPipelineEnv(env)
         setShowPipeline(true)
         return
       }
 
-      // Fallback: runId missing, poll for latest run
+      // fallback if backend response doesn't include runId
       const run = await fetchLatestPipelineRun(serviceName, env)
+
       if (run?.id) {
+        console.log("Fallback run found:", run.id)
+
         setPipelineRunId(run.id)
         setPipelineEnv(env)
         setShowPipeline(true)
       }
+
     } catch (err) {
       console.error("Deploy failed:", err)
       alert("Failed to trigger deployment")
