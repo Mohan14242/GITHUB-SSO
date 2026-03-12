@@ -123,7 +123,7 @@ function EnvCard({ env, data, deploying, onDeploy, onViewPipeline }) {
       </div>
 
       {/* Last deployed */}
-      {data?.lastDeployedAt && (
+      {data?.deployedAt && (
         <div style={{ fontSize: 11, color: "#334155" }}>
           🕐 {new Date(data.lastDeployedAt).toLocaleString()}
         </div>

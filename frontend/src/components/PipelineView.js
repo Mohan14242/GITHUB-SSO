@@ -136,8 +136,7 @@ export default function PipelineView({ runId, serviceName, environment, onClose 
 
   return (
     <div style={{
-      position: "fixed", inset: 0, zIndex: 2000,
-      background: "rgba(0,0,0,0.85)", backdropFilter: "blur(6px)",
+      height: "100%", display: "flex", flexDirection: "column",
       display: "flex", alignItems: "center", justifyContent: "center",
       padding: 24,
     }}>
