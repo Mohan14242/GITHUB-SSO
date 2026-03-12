@@ -42,12 +42,11 @@ function formatDuration(startedAt, completedAt) {
 export default function PipelineView({ runId, serviceName, environment, onClose }) {
   const [run,         setRun]         = useState(null)
   const [loading,     setLoading]     = useState(true)
-  const [sseStatus,   setSseStatus]   = useState("connecting") // connecting|live|completed|error
+  const [sseStatus,   setSseStatus]   = useState("connecting")
   const [expandedLog, setExpandedLog] = useState(null)
   const cleanupRef                    = useRef(null)
   const timerRef                      = useRef(null)
 
-  // ── Elapsed timer ─────────────────────────────────────────────
   useEffect(() => {
     timerRef.current = setInterval(() => {
       setRun(prev => prev ? { ...prev, _tick: Date.now() } : prev)
@@ -55,27 +54,18 @@ export default function PipelineView({ runId, serviceName, environment, onClose 
     return () => clearInterval(timerRef.current)
   }, [])
 
-  // ── SSE connection ────────────────────────────────────────────
   useEffect(() => {
     if (!runId) return
-
     setSseStatus("connecting")
     setLoading(true)
 
     const cleanup = streamPipelineRun(runId, {
-
-      // Backend sends: { type: "run_snapshot", payload: <PipelineRun> }
-      // ✅ FIX: unwrap .payload from the SSE envelope
       onSnapshot: (event) => {
         const data = event.payload ?? event
         setRun(data)
         setLoading(false)
         setSseStatus("live")
       },
-
-      // Backend sends: { type: "stage_updated", payload: <StagePayload> }
-      // ✅ FIX: was using `payload.stageName` directly — always undefined
-      //         because the full envelope { type, payload } was passed in
       onStageUpdated: (event) => {
         const stage = event.payload ?? event
         setRun(prev => {
@@ -83,42 +73,24 @@ export default function PipelineView({ runId, serviceName, environment, onClose 
           return {
             ...prev,
             stages: prev.stages.map(s =>
-              s.stageName === stage.stageName
-                ? { ...s, ...stage }
-                : s
+              s.stageName === stage.stageName ? { ...s, ...stage } : s
             ),
           }
         })
       },
-
-      // Backend sends: { type: "run_updated", payload: <RunPayload> }
-      // ✅ FIX: unwrap .payload so status/completedAt are accessible
       onRunUpdated: (event) => {
         const data = event.payload ?? event
-        setRun(prev => prev ? {
-          ...prev,
-          status:      data.status,
-          completedAt: data.completedAt,
-        } : prev)
+        setRun(prev => prev ? { ...prev, status: data.status, completedAt: data.completedAt } : prev)
       },
-
-      // Backend sends: { type: "run_completed", payload: <RunPayload> }
-      // ✅ FIX: unwrap .payload so status/completedAt are accessible
       onCompleted: (event) => {
         const data = event.payload ?? event
-        setRun(prev => prev ? {
-          ...prev,
-          status:      data.status,
-          completedAt: data.completedAt,
-        } : prev)
+        setRun(prev => prev ? { ...prev, status: data.status, completedAt: data.completedAt } : prev)
         setSseStatus("completed")
         clearInterval(timerRef.current)
       },
-
       onError: () => {
         setSseStatus("error")
         setLoading(false)
-        // Fallback: fetch snapshot via REST
         fetchPipelineRun(runId)
           .then(data => { setRun(data); setLoading(false) })
           .catch(() => {})
@@ -134,338 +106,281 @@ export default function PipelineView({ runId, serviceName, environment, onClose 
   const totalCount   = run?.stages?.length ?? 0
   const progressPct  = totalCount > 0 ? (successCount / totalCount) * 100 : 0
 
+  // ── ROOT: fills parent container — no fixed/absolute/centering ──
   return (
     <div style={{
-      height: "100%", display: "flex", flexDirection: "column",
-      display: "flex", alignItems: "center", justifyContent: "center",
-      padding: 24,
+      height: "100%",
+      background: "#080d14",
+      border: "1px solid #1e293b",
+      borderRadius: 16,
+      overflow: "hidden",
+      display: "flex",
+      flexDirection: "column",
+      boxShadow: "0 32px 80px rgba(0,0,0,0.6)",
     }}>
+
+      {/* ── Header ── */}
       <div style={{
-        background: "#080d14",
-        border: "1px solid #1e293b",
-        borderRadius: 16,
-        width: "100%", maxWidth: 740,
-        maxHeight: "90vh",
-        overflow: "hidden",
-        display: "flex", flexDirection: "column",
-        boxShadow: "0 32px 80px rgba(0,0,0,0.6)",
+        padding: "18px 24px",
+        borderBottom: "1px solid #0f172a",
+        background: "#060b12",
+        flexShrink: 0,
+        display: "flex", alignItems: "center", justifyContent: "space-between",
       }}>
-
-        {/* ── Header ── */}
-        <div style={{
-          padding: "18px 24px",
-          borderBottom: "1px solid #0f172a",
-          background: "#060b12",
-          display: "flex", alignItems: "center", justifyContent: "space-between",
-        }}>
-          <div>
-            <div style={{
-              fontSize: 10, fontWeight: 700, color: "#6366f1",
-              letterSpacing: "0.15em", textTransform: "uppercase",
-              fontFamily: "monospace", marginBottom: 5,
-              display: "flex", alignItems: "center", gap: 8,
+        <div>
+          <div style={{
+            fontSize: 10, fontWeight: 700, color: "#6366f1",
+            letterSpacing: "0.15em", textTransform: "uppercase",
+            fontFamily: "monospace", marginBottom: 5,
+            display: "flex", alignItems: "center", gap: 8,
+          }}>
+            Pipeline Run #{runId}
+            <span style={{
+              display: "flex", alignItems: "center", gap: 4,
+              padding: "2px 7px", borderRadius: 10,
+              background: sseStatus === "live"      ? "#001a0f" :
+                          sseStatus === "completed" ? "#001a0f" :
+                          sseStatus === "error"     ? "#1a0a0a" : "#0f172a",
+              border: `1px solid ${
+                sseStatus === "live"      ? "#10b98133" :
+                sseStatus === "completed" ? "#10b98133" :
+                sseStatus === "error"     ? "#e74c3c33" : "#1e293b"
+              }`,
+              color: sseStatus === "live"      ? "#10b981" :
+                     sseStatus === "completed" ? "#10b981" :
+                     sseStatus === "error"     ? "#e74c3c" : "#475569",
+              fontSize: 9,
             }}>
-              Pipeline Run #{runId}
-              {/* SSE indicator */}
               <span style={{
-                display: "flex", alignItems: "center", gap: 4,
-                padding: "2px 7px", borderRadius: 10,
-                background: sseStatus === "live"      ? "#001a0f" :
-                            sseStatus === "completed" ? "#001a0f" :
-                            sseStatus === "error"     ? "#1a0a0a" : "#0f172a",
-                border: `1px solid ${
-                  sseStatus === "live"      ? "#10b98133" :
-                  sseStatus === "completed" ? "#10b98133" :
-                  sseStatus === "error"     ? "#e74c3c33" : "#1e293b"
-                }`,
-                color: sseStatus === "live"      ? "#10b981" :
-                       sseStatus === "completed" ? "#10b981" :
-                       sseStatus === "error"     ? "#e74c3c" : "#475569",
-                fontSize: 9,
-              }}>
-                <span style={{
-                  width: 5, height: 5, borderRadius: "50%",
-                  background: "currentColor",
-                  animation: sseStatus === "live" ? "pulse 1.5s ease-in-out infinite" : "none",
-                }}/>
-                {sseStatus === "live"       ? "LIVE"
-                : sseStatus === "completed" ? "DONE"
-                : sseStatus === "error"     ? "FALLBACK"
-                : "CONNECTING"}
-              </span>
-            </div>
-
-            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-              <span style={{ color: "#f1f5f9", fontWeight: 700, fontSize: 16 }}>
-                {serviceName}
-              </span>
-              <span style={{
-                padding: "2px 8px", borderRadius: 4,
-                background: "#1e293b", border: "1px solid #334155",
-                color: "#64748b", fontSize: 11, fontFamily: "monospace",
-              }}>
-                {environment}
-              </span>
-              {runCfg && (
-                <span style={{
-                  display: "flex", alignItems: "center", gap: 5,
-                  padding: "3px 10px", borderRadius: 20,
-                  background: runCfg.color + "22",
-                  border: `1px solid ${runCfg.color}44`,
-                  color: runCfg.color, fontSize: 11, fontWeight: 700,
-                  animation: runCfg.pulse ? "pulse 1.5s ease-in-out infinite" : "none",
-                }}>
-                  {runCfg.icon} {runCfg.label}
-                </span>
-              )}
-            </div>
+                width: 5, height: 5, borderRadius: "50%",
+                background: "currentColor",
+                animation: sseStatus === "live" ? "pulse 1.5s ease-in-out infinite" : "none",
+              }}/>
+              {sseStatus === "live"       ? "LIVE"
+              : sseStatus === "completed" ? "DONE"
+              : sseStatus === "error"     ? "FALLBACK"
+              : "CONNECTING"}
+            </span>
           </div>
 
-          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-            {run && (
-              <div style={{
-                fontSize: 13, color: "#334155",
-                fontFamily: "monospace", fontWeight: 600,
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <span style={{ color: "#f1f5f9", fontWeight: 700, fontSize: 16 }}>
+              {serviceName}
+            </span>
+            <span style={{
+              padding: "2px 8px", borderRadius: 4,
+              background: "#1e293b", border: "1px solid #334155",
+              color: "#64748b", fontSize: 11, fontFamily: "monospace",
+            }}>
+              {environment}
+            </span>
+            {runCfg && (
+              <span style={{
+                display: "flex", alignItems: "center", gap: 5,
+                padding: "3px 10px", borderRadius: 20,
+                background: runCfg.color + "22",
+                border: `1px solid ${runCfg.color}44`,
+                color: runCfg.color, fontSize: 11, fontWeight: 700,
+                animation: runCfg.pulse ? "pulse 1.5s ease-in-out infinite" : "none",
               }}>
-                ⏱ {formatDuration(run.startedAt, run.completedAt) ?? "—"}
-              </div>
+                {runCfg.icon} {runCfg.label}
+              </span>
             )}
-            <button
-              onClick={() => { cleanupRef.current?.(); onClose() }}
-              style={{
-                background: "none", border: "1px solid #1e293b",
-                borderRadius: 7, color: "#475569", cursor: "pointer",
-                padding: "6px 12px", fontSize: 12, fontWeight: 600,
-              }}
-              onMouseEnter={e => { e.currentTarget.style.borderColor = "#e74c3c"; e.currentTarget.style.color = "#e74c3c" }}
-              onMouseLeave={e => { e.currentTarget.style.borderColor = "#1e293b"; e.currentTarget.style.color = "#475569" }}
-            >
-              ✕ Close
-            </button>
           </div>
         </div>
 
-        {/* ── Body ── */}
-        <div style={{ padding: "20px 24px", overflowY: "auto", flex: 1 }}>
-
-          {/* Loading */}
-          {loading && (
-            <div style={{ display: "flex", alignItems: "center", gap: 10, color: "#475569", padding: "40px 0" }}>
-              <div style={{
-                width: 16, height: 16, borderRadius: "50%",
-                border: "2px solid #1e293b", borderTop: "2px solid #6366f1",
-                animation: "spin 1s linear infinite",
-              }}/>
-              Connecting to pipeline stream…
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          {run && (
+            <div style={{ fontSize: 13, color: "#334155", fontFamily: "monospace", fontWeight: 600 }}>
+              ⏱ {formatDuration(run.startedAt, run.completedAt) ?? "—"}
             </div>
           )}
+          <button
+            onClick={() => { cleanupRef.current?.(); onClose() }}
+            style={{
+              background: "none", border: "1px solid #1e293b",
+              borderRadius: 7, color: "#475569", cursor: "pointer",
+              padding: "6px 12px", fontSize: 12, fontWeight: 600,
+            }}
+            onMouseEnter={e => { e.currentTarget.style.borderColor = "#e74c3c"; e.currentTarget.style.color = "#e74c3c" }}
+            onMouseLeave={e => { e.currentTarget.style.borderColor = "#1e293b"; e.currentTarget.style.color = "#475569" }}
+          >
+            ✕ Close
+          </button>
+        </div>
+      </div>
 
-          {!loading && run && (
-            <>
-              {/* Progress bar */}
-              <div style={{ marginBottom: 24 }}>
-                <div style={{
-                  display: "flex", justifyContent: "space-between",
-                  marginBottom: 6, alignItems: "center",
-                }}>
-                  <span style={{
-                    fontSize: 10, color: "#334155", fontWeight: 700,
-                    letterSpacing: "0.1em", textTransform: "uppercase",
-                  }}>
-                    Progress
-                  </span>
-                  <span style={{ fontSize: 11, color: "#475569", fontFamily: "monospace" }}>
-                    {successCount} / {totalCount} stages complete
-                  </span>
-                </div>
-                <div style={{
-                  height: 6, background: "#0f172a", borderRadius: 3,
-                  overflow: "hidden", border: "1px solid #1e293b",
-                }}>
-                  <div style={{
-                    height: "100%", borderRadius: 3,
-                    background: run.status === "failed"
-                      ? "linear-gradient(90deg, #e74c3c, #c0392b)"
-                      : "linear-gradient(90deg, #6366f1, #10b981)",
-                    width: `${progressPct}%`,
-                    transition: "width 0.6s ease",
-                  }}/>
-                </div>
+      {/* ── Body ── */}
+      <div style={{ padding: "20px 24px", overflowY: "auto", flex: 1 }}>
+
+        {loading && (
+          <div style={{ display: "flex", alignItems: "center", gap: 10, color: "#475569", padding: "40px 0" }}>
+            <div style={{
+              width: 16, height: 16, borderRadius: "50%",
+              border: "2px solid #1e293b", borderTop: "2px solid #6366f1",
+              animation: "spin 1s linear infinite",
+            }}/>
+            Connecting to pipeline stream…
+          </div>
+        )}
+
+        {!loading && run && (
+          <>
+            {/* Progress bar */}
+            <div style={{ marginBottom: 24 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6, alignItems: "center" }}>
+                <span style={{ fontSize: 10, color: "#334155", fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase" }}>
+                  Progress
+                </span>
+                <span style={{ fontSize: 11, color: "#475569", fontFamily: "monospace" }}>
+                  {successCount} / {totalCount} stages complete
+                </span>
               </div>
+              <div style={{ height: 6, background: "#0f172a", borderRadius: 3, overflow: "hidden", border: "1px solid #1e293b" }}>
+                <div style={{
+                  height: "100%", borderRadius: 3,
+                  background: run.status === "failed"
+                    ? "linear-gradient(90deg, #e74c3c, #c0392b)"
+                    : "linear-gradient(90deg, #6366f1, #10b981)",
+                  width: `${progressPct}%`,
+                  transition: "width 0.6s ease",
+                }}/>
+              </div>
+            </div>
 
-              {/* Stage timeline */}
-              <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>
-                {run.stages.map((stage, idx) => {
-                  const cfg         = STATUS_CFG[stage.status] ?? STATUS_CFG.pending
-                  const isExpanded  = expandedLog === stage.id
-                  const hasLogs     = !!stage.logs
-                  const prevSuccess = idx > 0 && run.stages[idx - 1].status === "success"
+            {/* Stage timeline */}
+            <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>
+              {run.stages.map((stage, idx) => {
+                const cfg         = STATUS_CFG[stage.status] ?? STATUS_CFG.pending
+                const isExpanded  = expandedLog === stage.id
+                const hasLogs     = !!stage.logs
+                const prevSuccess = idx > 0 && run.stages[idx - 1].status === "success"
 
-                  return (
-                    <div key={stage.id || idx}>
-                      {/* Connector */}
-                      {idx > 0 && (
-                        <div style={{
-                          width: 2, height: 12, marginLeft: 23,
-                          background: prevSuccess ? "#10b98144" : "#1e293b",
-                          transition: "background 0.3s",
-                        }}/>
-                      )}
+                return (
+                  <div key={stage.id || idx}>
+                    {idx > 0 && (
+                      <div style={{
+                        width: 2, height: 12, marginLeft: 23,
+                        background: prevSuccess ? "#10b98144" : "#1e293b",
+                        transition: "background 0.3s",
+                      }}/>
+                    )}
 
-                      <div
-                        onClick={() => hasLogs && setExpandedLog(isExpanded ? null : stage.id)}
-                        style={{
-                          display: "flex", alignItems: "flex-start", gap: 12,
-                          padding: "12px 14px",
-                          background: cfg.bg,
-                          border: `1px solid ${cfg.border}`,
-                          borderRadius: 8,
-                          cursor: hasLogs ? "pointer" : "default",
-                          transition: "border-color 0.2s, background 0.2s",
-                        }}
-                      >
-                        {/* Status circle */}
-                        <div style={{
-                          width: 28, height: 28, borderRadius: "50%",
-                          background: "#060b12",
-                          border: `2px solid ${cfg.color}`,
-                          display: "flex", alignItems: "center",
-                          justifyContent: "center",
-                          fontSize: 13, color: cfg.color, fontWeight: 800,
-                          flexShrink: 0,
-                          boxShadow: stage.status === "running" ? `0 0 10px ${cfg.color}44` : "none",
-                          transition: "box-shadow 0.3s",
-                        }}>
-                          {cfg.icon}
-                        </div>
+                    <div
+                      onClick={() => hasLogs && setExpandedLog(isExpanded ? null : stage.id)}
+                      style={{
+                        display: "flex", alignItems: "flex-start", gap: 12,
+                        padding: "12px 14px",
+                        background: cfg.bg,
+                        border: `1px solid ${cfg.border}`,
+                        borderRadius: 8,
+                        cursor: hasLogs ? "pointer" : "default",
+                        transition: "border-color 0.2s, background 0.2s",
+                      }}
+                    >
+                      <div style={{
+                        width: 28, height: 28, borderRadius: "50%",
+                        background: "#060b12",
+                        border: `2px solid ${cfg.color}`,
+                        display: "flex", alignItems: "center", justifyContent: "center",
+                        fontSize: 13, color: cfg.color, fontWeight: 800,
+                        flexShrink: 0,
+                        boxShadow: stage.status === "running" ? `0 0 10px ${cfg.color}44` : "none",
+                        transition: "box-shadow 0.3s",
+                      }}>
+                        {cfg.icon}
+                      </div>
 
-                        <div style={{ flex: 1, minWidth: 0 }}>
-                          <div style={{
-                            display: "flex", alignItems: "center",
-                            justifyContent: "space-between", gap: 8,
-                          }}>
-                            {/* Stage name */}
-                            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                              <span style={{ fontSize: 14 }}>
-                                {STAGE_ICONS[stage.stageName] ?? "▸"}
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                            <span style={{ fontSize: 14 }}>{STAGE_ICONS[stage.stageName] ?? "▸"}</span>
+                            <span style={{
+                              color: stage.status === "pending" ? "#475569" : "#e2e8f0",
+                              fontWeight: stage.status === "running" ? 700 : 500,
+                              fontSize: 13,
+                            }}>
+                              {stage.stageName}
+                            </span>
+                            {stage.status === "running" && (
+                              <span style={{ fontSize: 10, color: "#f59e0b", fontWeight: 700, animation: "pulse 1s ease-in-out infinite" }}>
+                                ● live
                               </span>
-                              <span style={{
-                                color: stage.status === "pending" ? "#475569" : "#e2e8f0",
-                                fontWeight: stage.status === "running" ? 700 : 500,
-                                fontSize: 13,
-                              }}>
-                                {stage.stageName}
-                              </span>
-                              {stage.status === "running" && (
-                                <span style={{
-                                  fontSize: 10, color: "#f59e0b",
-                                  fontWeight: 700,
-                                  animation: "pulse 1s ease-in-out infinite",
-                                }}>
-                                  ● live
-                                </span>
-                              )}
-                            </div>
-
-                            {/* Right side: duration + badge + expand */}
-                            <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
-                              {stage.startedAt && (
-                                <span style={{
-                                  fontSize: 11, color: "#334155",
-                                  fontFamily: "monospace",
-                                }}>
-                                  {formatDuration(stage.startedAt, stage.completedAt || undefined)}
-                                </span>
-                              )}
-                              <span style={{
-                                padding: "2px 8px", borderRadius: 20,
-                                background: cfg.color + "22", color: cfg.color,
-                                fontSize: 10, fontWeight: 700, textTransform: "uppercase",
-                              }}>
-                                {cfg.label}
-                              </span>
-                              {hasLogs && (
-                                <svg
-                                  width="12" height="12" fill="none"
-                                  stroke="#334155" strokeWidth="2" viewBox="0 0 24 24"
-                                  style={{
-                                    transform: isExpanded ? "rotate(90deg)" : "none",
-                                    transition: "transform 0.15s",
-                                  }}
-                                >
-                                  <path d="M9 18l6-6-6-6"/>
-                                </svg>
-                              )}
-                            </div>
+                            )}
                           </div>
 
-                          {/* Logs panel */}
-                          {isExpanded && hasLogs && (
-                            <div style={{
-                              marginTop: 10,
-                              background: "#020608",
-                              border: "1px solid #0f172a",
-                              borderRadius: 6, padding: "10px 12px",
-                              fontFamily: "monospace", fontSize: 11,
-                              color: "#64748b", whiteSpace: "pre-wrap",
-                              maxHeight: 200, overflowY: "auto",
-                              lineHeight: 1.7,
+                          <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+                            {stage.startedAt && (
+                              <span style={{ fontSize: 11, color: "#334155", fontFamily: "monospace" }}>
+                                {formatDuration(stage.startedAt, stage.completedAt || undefined)}
+                              </span>
+                            )}
+                            <span style={{
+                              padding: "2px 8px", borderRadius: 20,
+                              background: cfg.color + "22", color: cfg.color,
+                              fontSize: 10, fontWeight: 700, textTransform: "uppercase",
                             }}>
-                              {stage.logs}
-                            </div>
-                          )}
+                              {cfg.label}
+                            </span>
+                            {hasLogs && (
+                              <svg width="12" height="12" fill="none" stroke="#334155" strokeWidth="2" viewBox="0 0 24 24"
+                                style={{ transform: isExpanded ? "rotate(90deg)" : "none", transition: "transform 0.15s" }}
+                              >
+                                <path d="M9 18l6-6-6-6"/>
+                              </svg>
+                            )}
+                          </div>
                         </div>
+
+                        {isExpanded && hasLogs && (
+                          <div style={{
+                            marginTop: 10, background: "#020608",
+                            border: "1px solid #0f172a", borderRadius: 6,
+                            padding: "10px 12px", fontFamily: "monospace",
+                            fontSize: 11, color: "#64748b", whiteSpace: "pre-wrap",
+                            maxHeight: 200, overflowY: "auto", lineHeight: 1.7,
+                          }}>
+                            {stage.logs}
+                          </div>
+                        )}
                       </div>
                     </div>
-                  )
-                })}
-              </div>
+                  </div>
+                )
+              })}
+            </div>
 
-              {/* Final result banner */}
-              {(run.status === "success" || run.status === "failed") && (
-                <div style={{
-                  marginTop: 20, padding: "16px 20px", borderRadius: 10,
-                  background: run.status === "success" ? "#001a0f" : "#1a0a0a",
-                  border: `1px solid ${run.status === "success" ? "#10b98133" : "#e74c3c33"}`,
-                  display: "flex", alignItems: "center", gap: 14,
-                }}>
-                  <span style={{ fontSize: 28 }}>
-                    {run.status === "success" ? "🎉" : "💥"}
-                  </span>
-                  <div>
-                    <div style={{
-                      fontWeight: 700, fontSize: 14,
-                      color: run.status === "success" ? "#10b981" : "#e74c3c",
-                    }}>
-                      {run.status === "success"
-                        ? "Pipeline completed successfully"
-                        : "Pipeline failed — check stage logs above"}
-                    </div>
-                    <div style={{ fontSize: 12, color: "#475569", marginTop: 3 }}>
-                      Total time: {formatDuration(run.startedAt, run.completedAt) ?? "—"}
-                    </div>
+            {/* Final result banner */}
+            {(run.status === "success" || run.status === "failed") && (
+              <div style={{
+                marginTop: 20, padding: "16px 20px", borderRadius: 10,
+                background: run.status === "success" ? "#001a0f" : "#1a0a0a",
+                border: `1px solid ${run.status === "success" ? "#10b98133" : "#e74c3c33"}`,
+                display: "flex", alignItems: "center", gap: 14,
+              }}>
+                <span style={{ fontSize: 28 }}>{run.status === "success" ? "🎉" : "💥"}</span>
+                <div>
+                  <div style={{ fontWeight: 700, fontSize: 14, color: run.status === "success" ? "#10b981" : "#e74c3c" }}>
+                    {run.status === "success" ? "Pipeline completed successfully" : "Pipeline failed — check stage logs above"}
+                  </div>
+                  <div style={{ fontSize: 12, color: "#475569", marginTop: 3 }}>
+                    Total time: {formatDuration(run.startedAt, run.completedAt) ?? "—"}
                   </div>
                 </div>
-              )}
+              </div>
+            )}
 
-              {/* Live indicator */}
-              {sseStatus === "live" && (run.status === "pending" || run.status === "running") && (
-                <div style={{
-                  marginTop: 16, display: "flex", alignItems: "center",
-                  gap: 8, color: "#334155", fontSize: 11,
-                }}>
-                  <span style={{
-                    width: 7, height: 7, borderRadius: "50%",
-                    background: "#10b981",
-                    animation: "pulse 1.5s ease-in-out infinite",
-                    display: "inline-block",
-                  }}/>
-                  Streaming live updates via SSE — no polling needed
-                </div>
-              )}
-            </>
-          )}
-        </div>
+            {sseStatus === "live" && (run.status === "pending" || run.status === "running") && (
+              <div style={{ marginTop: 16, display: "flex", alignItems: "center", gap: 8, color: "#334155", fontSize: 11 }}>
+                <span style={{
+                  width: 7, height: 7, borderRadius: "50%", background: "#10b981",
+                  animation: "pulse 1.5s ease-in-out infinite", display: "inline-block",
+                }}/>
+                Streaming live updates via SSE — no polling needed
+              </div>
+            )}
+          </>
+        )}
       </div>
 
       <style>{`
