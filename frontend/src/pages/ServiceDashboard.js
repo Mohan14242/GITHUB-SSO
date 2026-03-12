@@ -47,7 +47,7 @@ function StatusBadge({ status }) {
 
 function EnvCard({ env, data, deploying, onDeploy, onViewPipeline }) {
   const cfg       = ENV_CFG[env] ?? { color: "#6366f1", bg: "#0d0f2e", label: env, icon: "📦" }
-  const isLoading = deploying[env]
+  const isLoading = deploying?.[env] === true
 
   return (
     <div
@@ -265,16 +265,14 @@ export default function ServiceDashboard() {
       const runId = res?.runId ?? res?.id ?? res?.run_id
 
       alert("Extracted runId: " + runId)
-
       if (runId) {
-        alert("Pipeline runId found → opening pipeline UI")
+        setDeploying(p => ({ ...p, [env]: false }))
 
         setPipelineRunId(runId)
         setPipelineEnv(env)
         setShowPipeline(true)
         return
       }
-
       alert("runId not returned → waiting for pipeline creation")
 
       console.log("Waiting for pipeline run to appear...")
