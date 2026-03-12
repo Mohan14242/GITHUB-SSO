@@ -251,6 +251,8 @@ export default function ServiceDashboard() {
     setDeploying(p => ({ ...p, [env]: true }))
     try {
       const res = await deployService(serviceName, env)
+      console.log("deploy response:", res)        // ← add this
+      console.log("runId:", res?.runId)
 
       // Primary: backend returns { message, runId }
       if (res?.runId) {
