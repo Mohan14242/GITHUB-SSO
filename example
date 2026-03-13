@@ -77,3 +77,6 @@ const data = await res.json()
 console.log(data)
 
 
+
+
+grep -r "import ServiceCard" /usr/share/nginx/html
