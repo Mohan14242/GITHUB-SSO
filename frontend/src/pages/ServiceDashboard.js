@@ -2,7 +2,7 @@ import { useEffect, useState } from "react"
 import { useParams, Link } from "react-router-dom"
 import { fetchServiceDashboard, deployService } from "../api/serviceApi"
 import { fetchLatestPipelineRun } from "../api/pipelineApi"
-import { fetchApprovalById } from "../api/approvalApi"
+import { fetchApprovalById } from "../api/approvals"
 import PipelineView from "../components/PipelineView"
 import ServiceCard from "../components/ServiceCard"
 
