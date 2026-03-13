@@ -10,6 +10,7 @@ RUN npm install
 # Copy the rest of the app source code
 COPY . .
 
+RUN rm -rf build
 # Build the app
 RUN npm run build
 
