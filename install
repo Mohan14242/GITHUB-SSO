@@ -7,6 +7,7 @@ sudo curl -L "https://github.com/docker/compose/releases/latest/download/docker-
 
 sudo chmod +x /usr/local/bin/docker-compose
 
+sudo yum installl git -y
 
 
 
@@ -15,16 +16,12 @@ add the production deployment  after approval need to trigger and also show the 
 
 add the rollback to the service dashboard and also add the pipeline viwer to it 
 
-
-
-
 next add the missing version tempates to the templates 
-
 
 add github deployment also 
 
+add the nice ui deployment approvals  and rollback 
 
-add the nice ui deployment approvals 
-
+in the service dashboard i need to see the how many deployments happen to the each environment environment success and failures and rollbacks in each environement 
 
 
