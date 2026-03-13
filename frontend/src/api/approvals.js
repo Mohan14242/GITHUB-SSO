@@ -6,13 +6,27 @@ export async function fetchProdApprovals() {
   return res.json()
 }
 
+
+export async function fetchApprovalById(approvalId) {
+  const res = await apiFetch(`/api/approvals/${approvalId}`)
+  if (!res?.ok) throw new Error("Failed to fetch approval")
+  return res.json()
+}
+
 export async function approveDeployment(id) {
-  const res = await apiFetch(`/api/approvals/${id}/approve`, { method: "POST" })
-  if (!res || !res.ok) throw new Error("Approval failed")
+  const res = await apiFetch(`/api/approvals/${id}/approve`, {
+    method: "POST",
+  })
+  if (!res?.ok) throw new Error("Failed to approve deployment")
+  return res.json()
 }
 
-export async function rejectDeployment(id) {
-  const res = await apiFetch(`/api/approvals/${id}/reject`, { method: "POST" })
-  if (!res || !res.ok) throw new Error("Rejection failed")
+export async function rejectDeployment(id, reason = "") {
+  const res = await apiFetch(`/api/approvals/${id}/reject`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ reason }),
+  })
+  if (!res?.ok) throw new Error("Failed to reject deployment")
+  return res.json()
 }
-

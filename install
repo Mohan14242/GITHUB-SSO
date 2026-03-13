@@ -10,10 +10,12 @@ sudo chmod +x /usr/local/bin/docker-compose
 
 
 
+add the production deployment  after approval need to trigger and also show the pipeline viewer
+
 
 add the rollback to the service dashboard and also add the pipeline viwer to it 
 
-add the production deployment  after approval need to trigger and also show the pipeline viewer
+
 
 
 next add the missing version tempates to the templates 

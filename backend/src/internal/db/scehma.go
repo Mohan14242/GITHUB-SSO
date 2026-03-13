@@ -83,6 +83,7 @@ func EnsureSchema() error {
 		requested_by  VARCHAR(150) NULL,
 		reviewed_by   VARCHAR(150) NULL,
 		reject_reason TEXT         NULL,
+		run_id        BIGINT       NULL,
 		created_at    TIMESTAMP    DEFAULT CURRENT_TIMESTAMP,
 		approved_at   TIMESTAMP    NULL,
 		INDEX idx_approvals_env_status (environment, status),
@@ -222,8 +223,18 @@ func EnsureSchema() error {
 
 	for _, idx := range indexes {
 		if _, err := DB.Exec(idx); err != nil {
-			// MySQL throws "Duplicate key name" if index exists — safe to ignore
 			log.Println("ℹ️ Index already exists or skipped:", err)
+		}
+	}
+
+	/* ===================== MIGRATIONS (safe ALTER for existing DBs) ===================== */
+	migrations := []string{
+		`ALTER TABLE deployment_approvals ADD COLUMN IF NOT EXISTS run_id BIGINT NULL;`,
+	}
+
+	for _, m := range migrations {
+		if _, err := DB.Exec(m); err != nil {
+			log.Println("ℹ️ Migration skipped (column may already exist):", err)
 		}
 	}
 

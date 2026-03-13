@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react"
 import { useParams, Link } from "react-router-dom"
-import { fetchServiceDashboard, deployService } from "../api/services"
+import { fetchServiceDashboard, deployService } from "../api/serviceApi"
 import { fetchLatestPipelineRun } from "../api/pipelineApi"
+import { fetchApprovalById } from "../api/approvalApi"
 import PipelineView from "../components/PipelineView"
 import ServiceCard from "../components/ServiceCard"
 
@@ -46,9 +47,10 @@ function StatusBadge({ status }) {
   )
 }
 
-function EnvCard({ env, data, deploying, onDeploy, onViewPipeline }) {
+function EnvCard({ env, data, deploying, pendingApproval, onDeploy, onViewPipeline }) {
   const cfg       = ENV_CFG[env] ?? { color: "#6366f1", bg: "#0d0f2e", label: env, icon: "📦" }
   const isLoading = deploying?.[env] === true
+  const isDisabled = isLoading || pendingApproval
 
   return (
     <div
@@ -104,6 +106,24 @@ function EnvCard({ env, data, deploying, onDeploy, onViewPipeline }) {
         <StatusBadge status={data?.status ?? "not_deployed"}/>
       </div>
 
+      {/* Pending approval banner */}
+      {pendingApproval && (
+        <div style={{
+          background: "#1a1200",
+          border: "1px solid #f59e0b33",
+          borderRadius: 7, padding: "8px 12px",
+          display: "flex", alignItems: "center", gap: 8,
+          fontSize: 11, color: "#f59e0b",
+        }}>
+          <span style={{
+            width: 7, height: 7, borderRadius: "50%",
+            background: "#f59e0b", flexShrink: 0,
+            animation: "pulse 1.2s ease-in-out infinite",
+          }}/>
+          Waiting for admin approval…
+        </div>
+      )}
+
       {/* Current version */}
       <div style={{
         background: "#060b12", border: "1px solid #0f172a",
@@ -134,24 +154,26 @@ function EnvCard({ env, data, deploying, onDeploy, onViewPipeline }) {
       <div style={{ display: "flex", gap: 8, marginTop: 2 }}>
         <button
           onClick={onDeploy}
-          disabled={isLoading}
+          disabled={isDisabled}
           style={{
             flex: 1, padding: "9px 0", borderRadius: 8,
             border: `1px solid ${cfg.color}44`,
-            background: isLoading ? cfg.color + "11" : cfg.color + "22",
-            color: isLoading ? cfg.color + "88" : cfg.color,
+            background: isDisabled ? cfg.color + "11" : cfg.color + "22",
+            color: isDisabled ? cfg.color + "88" : cfg.color,
             fontWeight: 700, fontSize: 12,
-            cursor: isLoading ? "not-allowed" : "pointer",
+            cursor: isDisabled ? "not-allowed" : "pointer",
             transition: "all 0.15s",
             display: "flex", alignItems: "center",
             justifyContent: "center", gap: 7,
             letterSpacing: "0.05em",
           }}
-          onMouseEnter={e => { if (!isLoading) e.currentTarget.style.background = cfg.color + "33" }}
-          onMouseLeave={e => { if (!isLoading) e.currentTarget.style.background = cfg.color + "22" }}
+          onMouseEnter={e => { if (!isDisabled) e.currentTarget.style.background = cfg.color + "33" }}
+          onMouseLeave={e => { if (!isDisabled) e.currentTarget.style.background = cfg.color + "22" }}
         >
           {isLoading
             ? <><Spinner color={cfg.color}/> Triggering…</>
+            : pendingApproval
+            ? <><Spinner color={cfg.color}/> Awaiting Approval…</>
             : <>▶ Deploy to {env.toUpperCase()}</>
           }
         </button>
@@ -221,13 +243,14 @@ function StatBox({ label, value, color = "#6366f1" }) {
 export default function ServiceDashboard() {
   const { serviceName } = useParams()
 
-  const [dashboard,     setDashboard]     = useState(null)
-  const [deploying,     setDeploying]     = useState({})
-  const [loading,       setLoading]       = useState(true)
-  const [showPipeline,  setShowPipeline]  = useState(false)
-  const [pipelineRunId, setPipelineRunId] = useState(null)
-  const [pipelineEnv,   setPipelineEnv]   = useState(null)
-  const [lastUpdated,   setLastUpdated]   = useState(null)
+  const [dashboard,        setDashboard]        = useState(null)
+  const [deploying,        setDeploying]        = useState({})
+  const [loading,          setLoading]          = useState(true)
+  const [showPipeline,     setShowPipeline]     = useState(false)
+  const [pipelineRunId,    setPipelineRunId]    = useState(null)
+  const [pipelineEnv,      setPipelineEnv]      = useState(null)
+  const [lastUpdated,      setLastUpdated]      = useState(null)
+  const [pendingApprovals, setPendingApprovals] = useState({}) // { prod: approvalId }
 
   // ── Poll dashboard ────────────────────────────────────────────
   useEffect(() => {
@@ -247,13 +270,13 @@ export default function ServiceDashboard() {
     return () => { mounted = false; clearInterval(iv) }
   }, [serviceName])
 
-  // ── Deploy helpers ────────────────────────────────────────────
+  // ── Helpers ───────────────────────────────────────────────────
   async function triggerDeployment(env) {
     try {
       const res = await deployService(serviceName, env)
-      return res?.runId ?? res?.run_id ?? res?.id ?? null
+      return res
     } catch (err) {
-      if (err.runId) return err.runId
+      if (err.runId) return { runId: err.runId }
       throw err
     }
   }
@@ -272,6 +295,28 @@ export default function ServiceDashboard() {
     return null
   }
 
+  // Poll GET /approvals/:id until approved/rejected, return runId
+  async function waitForApproval(approvalId, env) {
+    for (let attempt = 0; attempt < 60; attempt++) {   // up to ~3 mins
+      await new Promise(r => setTimeout(r, 3000))
+      try {
+        const approval = await fetchApprovalById(approvalId)
+
+        if (approval.status === "rejected") {
+          throw new Error("Deployment was rejected by admin")
+        }
+
+        if (approval.status === "approved" && approval.runId) {
+          return approval.runId
+        }
+      } catch (err) {
+        if (err.message === "Deployment was rejected by admin") throw err
+        console.warn("Polling approval status...", err.message)
+      }
+    }
+    throw new Error("Approval timed out — no response after 3 minutes")
+  }
+
   function openPipelineView(runId, env) {
     setPipelineRunId(runId)
     setPipelineEnv(env)
@@ -280,20 +325,43 @@ export default function ServiceDashboard() {
 
   // ── Deploy → open pipeline panel ─────────────────────────────
   const handleDeploy = async (env) => {
-    if (deploying[env]) return
+    if (deploying[env] || pendingApprovals[env]) return
+
     setDeploying(prev => ({ ...prev, [env]: true }))
+
     try {
       console.log("Deploying:", serviceName, env)
-      let runId = await triggerDeployment(env)
-      await new Promise(r => setTimeout(r, 2000))
-      if (!runId) {
-        runId = await waitForPipelineRun(env)
+      const res = await triggerDeployment(env)
+
+      // ── PROD: pending approval path ──
+      if (res?.status === "pending_approval") {
+        const approvalId = res.approvalId
+        console.log("[DEPLOY] Prod pending approval approvalId=", approvalId)
+
+        // Stop the button spinner — show approval waiting badge instead
+        setDeploying(prev => ({ ...prev, [env]: false }))
+        setPendingApprovals(prev => ({ ...prev, [env]: approvalId }))
+
+        // Block here until admin approves (polling every 3s)
+        const runId = await waitForApproval(approvalId, env)
+
+        // Approval received — clear badge and open pipeline
+        setPendingApprovals(prev => { const n = { ...prev }; delete n[env]; return n })
+        openPipelineView(runId, env)
+        return
       }
+
+      // ── DEV / TEST: normal flow ──
+      let runId = res?.runId ?? res?.run_id ?? res?.id ?? null
+      await new Promise(r => setTimeout(r, 2000))
+      if (!runId) runId = await waitForPipelineRun(env)
       if (!runId) throw new Error("Pipeline run not found")
       openPipelineView(runId, env)
+
     } catch (err) {
       console.error("Deployment failed:", err)
-      alert("Deployment failed")
+      setPendingApprovals(prev => { const n = { ...prev }; delete n[env]; return n })
+      alert(err.message || "Deployment failed")
     } finally {
       setDeploying(prev => ({ ...prev, [env]: false }))
     }
@@ -415,8 +483,8 @@ export default function ServiceDashboard() {
         gap: 10, marginBottom: 24,
         animation: "fadeUp 0.35s ease 0.08s both",
       }}>
-        <StatBox label="Environments" value={envs.length}           color="#6366f1"/>
-        <StatBox label="Deployed"     value={deployedEnvs}          color="#10b981"/>
+        <StatBox label="Environments" value={envs.length}                    color="#6366f1"/>
+        <StatBox label="Deployed"     value={deployedEnvs}                   color="#10b981"/>
         <StatBox label="Template"     value={dashboard?.templateName ?? "—"} color="#f59e0b"/>
         <StatBox label="Runtime"      value={dashboard?.runtime ?? "—"}      color="#06b6d4"/>
       </div>
@@ -461,6 +529,7 @@ export default function ServiceDashboard() {
                   env={env}
                   data={dashboard?.environments?.[env]}
                   deploying={deploying}
+                  pendingApproval={!!pendingApprovals[env]}
                   onDeploy={() => handleDeploy(env)}
                   onViewPipeline={() => handleViewPipeline(env)}
                 />

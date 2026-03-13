@@ -66,7 +66,7 @@ pipeline {
                             env.ENVIRONMENT = 'dev'
                         } else if (env.BRANCH_NAME == 'test') {
                             env.ENVIRONMENT = 'test'
-                        } else if (env.BRANCH_NAME in ['main','master']) {
+                        } else if (env.BRANCH_NAME in ['main', 'master']) {
                             env.ENVIRONMENT = 'prod'
                         } else {
                             error "Unsupported branch: ${env.BRANCH_NAME}"
@@ -178,7 +178,6 @@ pipeline {
         }
 
         stage('Deploy') {
-
             when {
                 expression { !params.ROLLBACK }
             }
@@ -207,7 +206,6 @@ pipeline {
         }
 
         stage('Rollback') {
-
             when {
                 allOf {
                     expression { params.ROLLBACK }
@@ -218,7 +216,7 @@ pipeline {
             steps {
                 script {
 
-                    notifyStage('Deploy', 'running',
+                    notifyStage('Rollback', 'running',
                         "Rolling back to ${params.ROLLBACK_VERSION} on ${env.ENVIRONMENT}...")
 
                     try {
@@ -227,12 +225,12 @@ pipeline {
 
                         sh "echo '🔄 Rolling back to ${env.VERSION}' && sleep 5 && echo 'Rollback complete'"
 
-                        notifyStage('Deploy', 'success',
+                        notifyStage('Rollback', 'success',
                             "Rolled back to ${env.VERSION} on ${env.ENVIRONMENT} successfully")
 
                     } catch (err) {
 
-                        notifyStage('Deploy', 'failed',
+                        notifyStage('Rollback', 'failed',
                             "Rollback failed: ${err.getMessage()}")
                         throw err
                     }
@@ -271,6 +269,7 @@ pipeline {
             script {
 
                 def actionType = params.ROLLBACK ? "rollback" : "deploy"
+                def commitSha  = params.ROLLBACK ? "" : (env.COMMIT_SHA ?: "")
 
                 sh """
                     curl -s -X POST ${env.PLATFORM_URL}/artifacts \
@@ -281,7 +280,7 @@ pipeline {
                             "environment":  "${env.ENVIRONMENT}",
                             "version":      "${env.VERSION}",
                             "artifactType": "docker",
-                            "commitSha":    "${env.COMMIT_SHA ?: ''}",
+                            "commitSha":    "${commitSha}",
                             "pipeline":     "jenkins",
                             "action":       "${actionType}",
                             "status":       "success"
@@ -294,6 +293,7 @@ pipeline {
             script {
 
                 def actionType = params.ROLLBACK ? "rollback" : "deploy"
+                def commitSha  = params.ROLLBACK ? "" : (env.COMMIT_SHA ?: "")
 
                 sh """
                     curl -s -X POST ${env.PLATFORM_URL}/artifacts \
@@ -302,9 +302,9 @@ pipeline {
                         -d '{
                             "serviceName":  "${env.SERVICE_NAME}",
                             "environment":  "${env.ENVIRONMENT}",
-                            "version":      "${env.VERSION ?: 'unknown'}",
+                            "version":      "${env.VERSION ?: "unknown"}",
                             "artifactType": "docker",
-                            "commitSha":    "${env.COMMIT_SHA ?: ''}",
+                            "commitSha":    "${commitSha}",
                             "pipeline":     "jenkins",
                             "action":       "${actionType}",
                             "status":       "failed"

@@ -57,13 +57,19 @@ func DeployServices(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// get actor
+	actor := "unknown"
+	if claims := auth.ClaimsFromContext(r.Context()); claims != nil {
+		actor = claims.GithubLogin
+	}
+
 	// ── prod → approval gate ──
 	if req.Environment == "prod" {
-		_, err := db.DB.Exec(`
+		result, err := db.DB.Exec(`
 			INSERT INTO deployment_approvals
-			  (service_name, environment, status, created_at)
-			VALUES (?, ?, 'pending', NOW())
-		`, serviceName, req.Environment)
+			  (service_name, environment, status, requested_by, created_at)
+			VALUES (?, ?, 'pending', ?, NOW())
+		`, serviceName, req.Environment, actor)
 
 		if err != nil {
 			log.Printf("[DEPLOY][ERROR] Failed to create approval for service=%s: %v", serviceName, err)
@@ -71,25 +77,32 @@ func DeployServices(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		approvalID, _ := result.LastInsertId()
+
 		audit.Log(r, audit.Entry{
 			Action:       "deployment_triggered",
 			ResourceType: "deployment",
 			ResourceName: serviceName,
 			Environment:  "prod",
 			Status:       "pending",
-			Details:      fmt.Sprintf("Production deployment queued for approval service=%s", serviceName),
+			Details:      fmt.Sprintf("Production deployment queued for approval service=%s approvalId=%d", serviceName, approvalID),
 		})
 
-		log.Printf("[DEPLOY] Prod deployment queued for approval service=%s", serviceName)
+		log.Printf("[DEPLOY] Prod deployment queued for approval service=%s approvalId=%d", serviceName, approvalID)
+
+		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusAccepted)
-		w.Write([]byte(`{"status":"pending_approval"}`))
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"status":     "pending_approval",
+			"approvalId": approvalID,
+		})
 		return
 	}
 
 	log.Printf("[DEPLOY] Triggering deployment service=%s environment=%s branch=%s",
 		serviceName, req.Environment, branch)
 
-	// 🔍 Get CICD type & repo info
+	// Get CICD type & repo info
 	var cicdType, repo string
 	err := db.DB.QueryRow(`
 		SELECT cicd_type, repo_name FROM services WHERE service_name = ?
@@ -102,21 +115,16 @@ func DeployServices(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("[DEPLOY] cicdType=%s repo=%s", cicdType, repo)
 
-	// get actor for pipeline run
-	actor := "unknown"
-	if claims := auth.ClaimsFromContext(r.Context()); claims != nil {
-		actor = claims.GithubLogin
-	}
-
-	// 🏗️ Create pipeline run
+	// Create pipeline run
 	runID, err := CreatePipelineRun(serviceName, req.Environment, actor, cicdType)
 	if err != nil {
 		log.Printf("[DEPLOY][ERROR] Failed to create pipeline run service=%s: %v", serviceName, err)
 		http.Error(w, "failed to create pipeline run", http.StatusInternalServerError)
 		return
 	}
-	log.Printf("[---------------------------------------------------------------------------] pipeline run created runID=%d service=%s env=%s", runID, serviceName, req.Environment)
-	// 🚀 Trigger CICD
+	log.Printf("[DEPLOY] pipeline run created runID=%d service=%s env=%s", runID, serviceName, req.Environment)
+
+	// Trigger CICD
 	switch cicdType {
 	case "jenkins":
 		err = cicd.TriggerJenkinsDeploy(serviceName, branch, runID)
@@ -139,7 +147,12 @@ func DeployServices(w http.ResponseWriter, r *http.Request) {
 			Details:      fmt.Sprintf("CICD trigger failed cicdType=%s runID=%d error=%s", cicdType, runID, err.Error()),
 		})
 
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"error": err.Error(),
+			"runId": runID,
+		})
 		return
 	}
 
