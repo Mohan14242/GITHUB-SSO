@@ -1,3 +1,4 @@
+```groovy
 pipeline {
     agent any
 
@@ -21,20 +22,15 @@ pipeline {
 
     environment {
         PLATFORM_URL     = "http://platform.buyforu.run.place/api"
-        PLATFORM_API_KEY = credentials('PLATFORM_API_KEY') // stored in Jenkins credentials
+        PLATFORM_API_KEY = credentials('PLATFORM_API_KEY')
         RUN_ID           = "${params.RUN_ID}"
     }
 
     stages {
 
-        // ══════════════════════════════════════════════
-        // STAGE 1 — Checkout
-        // ══════════════════════════════════════════════
-
         stage('Checkout') {
             steps {
                 script {
-                    // Notify: running
                     notifyStage('Checkout', 'running', 'Starting checkout...')
 
                     try {
@@ -48,16 +44,13 @@ pipeline {
             }
         }
 
-        // ══════════════════════════════════════════════
-        // STAGE 2 — Setup (load config + detect env)
-        // ══════════════════════════════════════════════
-
         stage('Setup') {
             steps {
                 script {
                     notifyStage('Setup', 'running', 'Loading project configuration...')
 
                     try {
+
                         if (!fileExists('config.json')) {
                             error "config.json file not found!"
                         }
@@ -70,12 +63,11 @@ pipeline {
 
                         echo "SERVICE_NAME = ${env.SERVICE_NAME}"
 
-                        // Detect environment from branch
                         if (env.BRANCH_NAME == 'dev') {
                             env.ENVIRONMENT = 'dev'
                         } else if (env.BRANCH_NAME == 'test') {
                             env.ENVIRONMENT = 'test'
-                        } else if (env.BRANCH_NAME in ['main', 'master']) {
+                        } else if (env.BRANCH_NAME in ['main','master']) {
                             env.ENVIRONMENT = 'prod'
                         } else {
                             error "Unsupported branch: ${env.BRANCH_NAME}"
@@ -94,19 +86,18 @@ pipeline {
             }
         }
 
-        // ══════════════════════════════════════════════
-        // STAGE 3 — Build (generate version)
-        // ══════════════════════════════════════════════
-
         stage('Build') {
             when {
                 expression { !params.ROLLBACK }
             }
+
             steps {
                 script {
+
                     notifyStage('Build', 'running', 'Generating version and building...')
 
                     try {
+
                         env.COMMIT_SHA = sh(
                             script: "git rev-parse --short HEAD",
                             returnStdout: true
@@ -117,108 +108,99 @@ pipeline {
 
                         echo "Generated VERSION=${env.VERSION}"
 
-                        // Simulate build time
                         sh "echo 'Simulating build...' && sleep 5 && echo 'Build complete'"
 
-                        notifyStage('Build', 'success', "Built version ${env.VERSION} successfully")
+                        notifyStage('Build', 'success',
+                            "Built version ${env.VERSION} successfully")
 
                     } catch (err) {
-                        notifyStage('Build', 'failed', "Build failed: ${err.getMessage()}")
+
+                        notifyStage('Build', 'failed',
+                            "Build failed: ${err.getMessage()}")
                         throw err
                     }
                 }
             }
-            post {
-                // Skipped when ROLLBACK=true (when block skips the stage)
-                skipped {
-                    script {
-                        notifyStage('Build', 'skipped', 'Skipped — rollback mode')
-                    }
-                }
-            }
         }
-
-        // ══════════════════════════════════════════════
-        // STAGE 4 — Test
-        // ══════════════════════════════════════════════
 
         stage('Test') {
             when {
                 expression { !params.ROLLBACK }
             }
+
             steps {
                 script {
+
                     notifyStage('Test', 'running', 'Running tests...')
 
                     try {
+
                         sh "echo 'Running unit tests...' && sleep 4 && echo 'All tests passed'"
-                        notifyStage('Test', 'success', 'All tests passed')
+
+                        notifyStage('Test', 'success',
+                            'All tests passed')
 
                     } catch (err) {
-                        notifyStage('Test', 'failed', "Tests failed: ${err.getMessage()}")
+
+                        notifyStage('Test', 'failed',
+                            "Tests failed: ${err.getMessage()}")
                         throw err
                     }
                 }
             }
-            post {
-                skipped {
-                    script {
-                        notifyStage('Test', 'skipped', 'Skipped — rollback mode')
-                    }
-                }
-            }
         }
-
-        // ══════════════════════════════════════════════
-        // STAGE 5 — Push Image
-        // ══════════════════════════════════════════════
 
         stage('Push Image') {
             when {
                 expression { !params.ROLLBACK }
             }
+
             steps {
                 script {
-                    notifyStage('Push Image', 'running', 'Pushing docker image to registry...')
+
+                    notifyStage('Push Image', 'running',
+                        'Pushing docker image to registry...')
 
                     try {
+
                         sh "echo 'Pushing image ${env.VERSION}...' && sleep 6 && echo 'Image pushed'"
-                        notifyStage('Push Image', 'success', "Pushed ${env.VERSION} to registry")
+
+                        notifyStage('Push Image', 'success',
+                            "Pushed ${env.VERSION} to registry")
 
                     } catch (err) {
-                        notifyStage('Push Image', 'failed', "Image push failed: ${err.getMessage()}")
+
+                        notifyStage('Push Image', 'failed',
+                            "Image push failed: ${err.getMessage()}")
                         throw err
-                    }
-                }
-            }
-            post {
-                skipped {
-                    script {
-                        notifyStage('Push Image', 'skipped', 'Skipped — rollback mode')
                     }
                 }
             }
         }
 
-        // ══════════════════════════════════════════════
-        // STAGE 6 — Deploy / Rollback
-        // ══════════════════════════════════════════════
-
         stage('Deploy') {
+
             when {
                 expression { !params.ROLLBACK }
             }
+
             steps {
                 script {
-                    notifyStage('Deploy', 'running', "Deploying ${env.VERSION} to ${env.ENVIRONMENT}...")
+
+                    notifyStage('Deploy', 'running',
+                        "Deploying ${env.VERSION} to ${env.ENVIRONMENT}...")
 
                     try {
+
                         sh "echo '🚀 Deploying ${env.VERSION} to ${env.ENVIRONMENT}' && sleep 5 && echo 'Deploy complete'"
+
                         notifyStage('Deploy', 'success',
                             "Deployed ${env.VERSION} to ${env.ENVIRONMENT} successfully")
 
                     } catch (err) {
-                        notifyStage('Deploy', 'failed', "Deploy failed: ${err.getMessage()}")
+
+                        notifyStage('Deploy', 'failed',
+                            "Deploy failed: ${err.getMessage()}")
                         throw err
                     }
                 }
@@ -226,45 +208,55 @@ pipeline {
         }
 
         stage('Rollback') {
+
             when {
                 allOf {
                     expression { params.ROLLBACK }
                     expression { params.ROLLBACK_VERSION?.trim() }
                 }
             }
+
             steps {
                 script {
+
                     notifyStage('Deploy', 'running',
                         "Rolling back to ${params.ROLLBACK_VERSION} on ${env.ENVIRONMENT}...")
 
                     try {
+
                         env.VERSION = params.ROLLBACK_VERSION
+
                         sh "echo '🔄 Rolling back to ${env.VERSION}' && sleep 5 && echo 'Rollback complete'"
+
                         notifyStage('Deploy', 'success',
                             "Rolled back to ${env.VERSION} on ${env.ENVIRONMENT} successfully")
 
                     } catch (err) {
-                        notifyStage('Deploy', 'failed', "Rollback failed: ${err.getMessage()}")
+
+                        notifyStage('Deploy', 'failed',
+                            "Rollback failed: ${err.getMessage()}")
                         throw err
                     }
                 }
             }
         }
 
-        // ══════════════════════════════════════════════
-        // STAGE 7 — Health Check
-        // ══════════════════════════════════════════════
-
         stage('Health Check') {
             steps {
                 script {
-                    notifyStage('Health Check', 'running', 'Running health checks...')
+
+                    notifyStage('Health Check', 'running',
+                        'Running health checks...')
 
                     try {
+
                         sh "echo 'Checking service health...' && sleep 3 && echo 'Service is healthy'"
-                        notifyStage('Health Check', 'success', 'All health checks passed. Service is live.')
+
+                        notifyStage('Health Check', 'success',
+                            'All health checks passed. Service is live.')
 
                     } catch (err) {
+
                         notifyStage('Health Check', 'failed',
                             "Health check failed — service may be down: ${err.getMessage()}")
                         throw err
@@ -274,20 +266,17 @@ pipeline {
         }
     }
 
-    // ══════════════════════════════════════════════
-    // ARTIFACT NOTIFICATION — same as before
-    // ══════════════════════════════════════════════
-
     post {
+
         success {
             script {
+
                 def actionType = params.ROLLBACK ? "rollback" : "deploy"
-                echo "✅ Pipeline SUCCESS for ${env.VERSION} (${actionType})"
 
                 sh """
-                    curl -s -X POST ${env.PLATFORM_URL}/artifacts \\
-                        -H "Content-Type: application/json" \\
-                        -H "X-API-Key: ${env.PLATFORM_API_KEY}" \\
+                    curl -s -X POST ${env.PLATFORM_URL}/artifacts \
+                        -H "Content-Type: application/json" \
+                        -H "X-API-Key: ${env.PLATFORM_API_KEY}" \
                         -d '{
                             "serviceName":  "${env.SERVICE_NAME}",
                             "environment":  "${env.ENVIRONMENT}",
@@ -304,13 +293,13 @@ pipeline {
 
         failure {
             script {
+
                 def actionType = params.ROLLBACK ? "rollback" : "deploy"
-                echo "❌ Pipeline FAILED for ${env.SERVICE_NAME} (${actionType})"
 
                 sh """
-                    curl -s -X POST ${env.PLATFORM_URL}/artifacts \\
-                        -H "Content-Type: application/json" \\
-                        -H "X-API-Key: ${env.PLATFORM_API_KEY}" \\
+                    curl -s -X POST ${env.PLATFORM_URL}/artifacts \
+                        -H "Content-Type: application/json" \
+                        -H "X-API-Key: ${env.PLATFORM_API_KEY}" \
                         -d '{
                             "serviceName":  "${env.SERVICE_NAME}",
                             "environment":  "${env.ENVIRONMENT}",
@@ -327,28 +316,20 @@ pipeline {
     }
 }
 
-// ══════════════════════════════════════════════
-// HELPER — notifyStage
-// Sends stage update to platform via X-API-Key
-// Skips silently if RUN_ID is empty (manual runs)
-// ══════════════════════════════════════════════
-
 def notifyStage(String stageName, String status, String logs = '') {
+
     if (!env.RUN_ID?.trim()) {
-        echo "[PLATFORM] RUN_ID not set — skipping stage notification for ${stageName}=${status}"
+        echo "[PLATFORM] RUN_ID not set — skipping stage notification"
         return
     }
 
-    // Escape single quotes in logs to avoid breaking the JSON
     def safeLogs = logs.replace("'", "\\'")
 
     sh """
-        curl -s -X POST ${env.PLATFORM_URL}/pipeline/${env.RUN_ID}/stage \\
-            -H "X-API-Key: ${env.PLATFORM_API_KEY}" \\
-            -H "Content-Type: application/json" \\
-            -d '{"stageName":"${stageName}","status":"${status}","logs":"${safeLogs}"}' \\
-            || echo "[PLATFORM] Warning: stage notification failed for ${stageName}=${status}"
+        curl -s -X POST ${env.PLATFORM_URL}/pipeline/${env.RUN_ID}/stage \
+            -H "X-API-Key: ${env.PLATFORM_API_KEY}" \
+            -H "Content-Type: application/json" \
+            -d '{"stageName":"${stageName}","status":"${status}","logs":"${safeLogs}"}'
     """
-
-    echo "[PLATFORM] notified stageName=${stageName} status=${status}"
 }
+```
