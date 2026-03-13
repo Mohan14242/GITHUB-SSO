@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react"
 import { useParams, Link } from "react-router-dom"
-import { fetchServiceDashboard, deployService } from "../api/serviceApi"
+import { fetchServiceDashboard, deployService } from "../api/services"
 import { fetchLatestPipelineRun } from "../api/pipelineApi"
 import { fetchApprovalById } from "../api/approvals"
 import PipelineView from "../components/PipelineView"
