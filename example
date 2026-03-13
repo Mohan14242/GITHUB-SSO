@@ -43,7 +43,7 @@ fetch("/api/pipeline/service/ordersloki/dev", {
 .then(r => r.json())
 .then(console.log)
 
-fetch("/api/pipeline/12", {
+fetch("/api/pipeline/70", {
   headers: {
     Authorization: "Bearer " + sessionStorage.getItem("jwt_token")
   }
