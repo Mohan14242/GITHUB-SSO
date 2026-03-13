@@ -3,8 +3,9 @@ import { useParams, Link } from "react-router-dom"
 import { fetchServiceDashboard, deployService } from "../api/services"
 import { fetchLatestPipelineRun } from "../api/pipelineApi"
 import PipelineView from "../components/PipelineView"
+import ServiceCard from "../components/ServiceCard"
 
-const DEFAULT_ENVS    = ["dev", "test", "prod"]
+const DEFAULT_ENVS     = ["dev", "test", "prod"]
 const POLL_INTERVAL_MS = 5000
 
 const ENV_CFG = {
@@ -246,7 +247,7 @@ export default function ServiceDashboard() {
     return () => { mounted = false; clearInterval(iv) }
   }, [serviceName])
 
-
+  // ── Deploy helpers ────────────────────────────────────────────
   async function triggerDeployment(env) {
     try {
       const res = await deployService(serviceName, env)
@@ -256,22 +257,18 @@ export default function ServiceDashboard() {
       throw err
     }
   }
+
   async function waitForPipelineRun(env) {
     for (let attempt = 0; attempt < 6; attempt++) {
-
       try {
         const latest = await fetchLatestPipelineRun(serviceName, env)
-
-        // safer — handles whatever field name your backend uses
         const id = latest?.id ?? latest?.runId ?? latest?.run_id
         if (id) return id
-      } catch (err) {
+      } catch {
         console.warn("Pipeline not ready yet")
       }
-
       await new Promise(r => setTimeout(r, 2000))
     }
-
     return null
   }
 
@@ -280,45 +277,35 @@ export default function ServiceDashboard() {
     setPipelineEnv(env)
     setShowPipeline(true)
   }
+
   // ── Deploy → open pipeline panel ─────────────────────────────
   const handleDeploy = async (env) => {
     if (deploying[env]) return
-
     setDeploying(prev => ({ ...prev, [env]: true }))
-
     try {
-
       console.log("Deploying:", serviceName, env)
-
       let runId = await triggerDeployment(env)
-  // wait 2 seconds for pipeline to start
       await new Promise(r => setTimeout(r, 2000))
       if (!runId) {
         runId = await waitForPipelineRun(env)
       }
-      if (!runId) {
-        throw new Error("Pipeline run not found")
-      }
+      if (!runId) throw new Error("Pipeline run not found")
       openPipelineView(runId, env)
-
     } catch (err) {
-
       console.error("Deployment failed:", err)
       alert("Deployment failed")
-
     } finally {
-
       setDeploying(prev => ({ ...prev, [env]: false }))
-
     }
-
   }
+
   // ── View latest pipeline for env ──────────────────────────────
   const handleViewPipeline = async (env) => {
     try {
       const run = await fetchLatestPipelineRun(serviceName, env)
-      if (run?.id) {
-        setPipelineRunId(run.id)
+      const id = run?.id ?? run?.runId ?? run?.run_id
+      if (id) {
+        setPipelineRunId(id)
         setPipelineEnv(env)
         setShowPipeline(true)
       }
@@ -428,10 +415,10 @@ export default function ServiceDashboard() {
         gap: 10, marginBottom: 24,
         animation: "fadeUp 0.35s ease 0.08s both",
       }}>
-        <StatBox label="Environments" value={envs.length}                            color="#6366f1"/>
-        <StatBox label="Deployed"     value={deployedEnvs}                           color="#10b981"/>
-        <StatBox label="Template"     value={dashboard?.templateName ?? "—"}         color="#f59e0b"/>
-        <StatBox label="Runtime"      value={dashboard?.runtime ?? "—"}              color="#06b6d4"/>
+        <StatBox label="Environments" value={envs.length}           color="#6366f1"/>
+        <StatBox label="Deployed"     value={deployedEnvs}          color="#10b981"/>
+        <StatBox label="Template"     value={dashboard?.templateName ?? "—"} color="#f59e0b"/>
+        <StatBox label="Runtime"      value={dashboard?.runtime ?? "—"}      color="#06b6d4"/>
       </div>
 
       {/* ── Loading ── */}
@@ -463,8 +450,8 @@ export default function ServiceDashboard() {
             <div style={{
               display: "grid",
               gridTemplateColumns: showPipeline
-                ? "1fr"                                    // single column when panel open
-                : "repeat(auto-fill,minmax(290px,1fr))",  // normal grid when closed
+                ? "1fr"
+                : "repeat(auto-fill,minmax(290px,1fr))",
               gap: 14,
               transition: "grid-template-columns 0.3s ease",
             }}>
@@ -513,6 +500,17 @@ export default function ServiceDashboard() {
           <div style={{ color: "#334155", fontSize: 13 }}>
             Use the deploy buttons above to initialize this service
           </div>
+        </div>
+      )}
+
+      {/* ── Rollback ── */}
+      {!loading && dashboard && (
+        <div style={{ marginTop: 24 }}>
+          <ServiceCard
+            serviceName={serviceName}
+            dashboard={dashboard}
+            onRollbackSuccess={openPipelineView}
+          />
         </div>
       )}
 
