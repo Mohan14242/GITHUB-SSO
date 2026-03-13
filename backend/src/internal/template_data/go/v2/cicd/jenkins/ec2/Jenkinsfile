@@ -1,0 +1,3 @@
+pipeline{
+    this is the ec2 instance based architecture
+}

@@ -1,0 +1,134 @@
+name: Practice Deploy Pipeline
+
+on:
+  workflow_dispatch:
+    inputs:
+      rollback:
+        description: "Enable rollback"
+        required: false
+        default: "false"
+      rollback_version:
+        description: "Version to rollback to"
+        required: false
+        default: ""
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Load project configuration
+        run: |
+          if [ ! -f config.json ]; then
+            echo "config.json not found"
+            exit 1
+          fi
+
+          SERVICE_NAME=$(jq -r '.serviceName' config.json)
+          echo "SERVICE_NAME=$SERVICE_NAME" >> $GITHUB_ENV
+          echo "Loaded SERVICE_NAME=$SERVICE_NAME"
+
+      # ================= DETECT ENVIRONMENT =================
+
+      - name: Detect environment
+        run: |
+          BRANCH="${GITHUB_REF_NAME}"
+
+          if [ "$BRANCH" = "dev" ]; then
+            ENVIRONMENT="dev"
+          elif [ "$BRANCH" = "test" ]; then
+            ENVIRONMENT="test"
+          elif [ "$BRANCH" = "main" ] || [ "$BRANCH" = "master" ]; then
+            ENVIRONMENT="prod"
+          else
+            echo "Unsupported branch: $BRANCH"
+            exit 1
+          fi
+
+          echo "ENVIRONMENT=$ENVIRONMENT" >> $GITHUB_ENV
+          echo "ENVIRONMENT resolved as $ENVIRONMENT"
+
+      # ================= NORMAL DEPLOY =================
+
+      - name: Generate version
+        if: ${{ inputs.rollback != 'true' }}
+        run: |
+          COMMIT_SHA=$(git rev-parse --short HEAD)
+          RANDOM_NUM=$((RANDOM % 10000))
+
+          VERSION="myservive/${SERVICE_NAME}-${COMMIT_SHA}-${RANDOM_NUM}"
+
+          echo "COMMIT_SHA=$COMMIT_SHA" >> $GITHUB_ENV
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+
+          echo "Generated VERSION=$VERSION"
+
+      - name: Simulate deploy
+        if: ${{ inputs.rollback != 'true' }}
+        run: |
+          echo "🚀 Simulating deployment"
+          echo "Service: $SERVICE_NAME"
+          echo "Environment: $ENVIRONMENT"
+          echo "Version: $VERSION"
+
+      # ================= ROLLBACK =================
+
+      - name: Simulate rollback
+        if: ${{ inputs.rollback == 'true' && inputs.rollback_version != '' }}
+        run: |
+          VERSION="${{ inputs.rollback_version }}"
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+
+          echo "🔄 Simulating rollback"
+          echo "Service: $SERVICE_NAME"
+          echo "Environment: $ENVIRONMENT"
+          echo "Rollback Version: $VERSION"
+
+      # ================= NOTIFY PLATFORM (SUCCESS) =================
+
+      - name: Notify platform (success)
+        if: success()
+        run: |
+          ACTION_TYPE="deploy"
+          if [ "${{ inputs.rollback }}" = "true" ]; then
+            ACTION_TYPE="rollback"
+          fi
+
+          curl -X POST http://54.163.70.153/api/artifacts \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"serviceName\": \"$SERVICE_NAME\",
+              \"environment\": \"$ENVIRONMENT\",
+              \"version\": \"$VERSION\",
+              \"artifactType\": \"docker\",
+              \"commitSha\": \"${COMMIT_SHA:-}\",
+              \"pipeline\": \"github\",
+              \"action\": \"$ACTION_TYPE\",
+              \"status\": \"success\"
+            }"
+
+      # ================= NOTIFY PLATFORM (FAILURE) =================
+
+      - name: Notify platform (failure)
+        if: failure()
+        run: |
+          ACTION_TYPE="deploy"
+          if [ "${{ inputs.rollback }}" = "true" ]; then
+            ACTION_TYPE="rollback"
+          fi
+
+          curl -X POST http://54.163.70.153/api/artifacts \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"serviceName\": \"$SERVICE_NAME\",
+              \"environment\": \"$ENVIRONMENT\",
+              \"version\": \"${VERSION:-unknown}\",
+              \"artifactType\": \"docker\",
+              \"commitSha\": \"${COMMIT_SHA:-}\",
+              \"pipeline\": \"github\",
+              \"action\": \"$ACTION_TYPE\",
+              \"status\": \"failed\"
+            }"
