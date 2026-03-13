@@ -20,9 +20,23 @@ export async function deployService(serviceName, environment) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ environment }),
   })
-  if (!res || !res.ok) throw new Error("Deployment failed")
-  return res.json()
+
+  if (!res) throw new Error("No response from server")
+
+  let data = null
+  try { data = await res.json() } catch {}
+
+  if (!res.ok) {
+    const err = new Error(data?.error || "Deployment failed")
+    err.runId = data?.runId ?? data?.run_id ?? null
+    throw err
+  }
+
+  return data
 }
+
+
+
 
 
 export async function fetchPlatformStats() {
