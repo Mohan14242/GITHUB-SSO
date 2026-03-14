@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useState, useRef, useCallback } from "react"
 import { useParams, Link } from "react-router-dom"
 import { fetchServiceDashboard, deployService } from "../api/services"
 import { fetchLatestPipelineRun } from "../api/pipelineApi"
@@ -8,6 +8,8 @@ import ServiceCard from "../components/ServiceCard"
 
 const DEFAULT_ENVS     = ["dev", "test", "prod"]
 const POLL_INTERVAL_MS = 5000
+// How often to poll approval status when a prod deploy is pending approval
+const APPROVAL_POLL_MS = 3000
 
 const ENV_CFG = {
   dev:  { color: "#6366f1", bg: "#0d0f2e", label: "Development", icon: "⚗️"  },
@@ -271,37 +273,87 @@ export default function ServiceDashboard() {
   const [pipelineEnv,      setPipelineEnv]      = useState(null)
   const [lastUpdated,      setLastUpdated]      = useState(null)
   const [pendingApprovals, setPendingApprovals] = useState({}) // { prod: approvalId }
-  const [runningEnvs,      setRunningEnvs]      = useState({}) // { dev: true } — pipeline active
+  const [runningEnvs,      setRunningEnvs]      = useState({}) // { dev: true }
+
+  // Refs so interval callbacks always see the latest values without
+  // needing to be recreated (avoids stale-closure bugs)
   const pendingApprovalsRef = useRef({})
+  const showPipelineRef     = useRef(false)
 
-  // keep ref in sync with state so interval callbacks see fresh values
+  useEffect(() => { pendingApprovalsRef.current = pendingApprovals }, [pendingApprovals])
+  useEffect(() => { showPipelineRef.current     = showPipeline     }, [showPipeline])
+
+  // ── openPipelineView — stable reference via useCallback ───────
+  const openPipelineView = useCallback((runId, env) => {
+    setPipelineRunId(runId)
+    setPipelineEnv(env)
+    setShowPipeline(true)
+  }, [])
+
+  // ── Approval poller — dedicated interval, only runs while there
+  //    are pending approvals. This is the SINGLE source of truth
+  //    for resolving a prod approval; handleDeploy no longer races
+  //    against it. ──────────────────────────────────────────────
   useEffect(() => {
-    pendingApprovalsRef.current = pendingApprovals
-  }, [pendingApprovals])
+    // No pending approvals → nothing to poll
+    if (Object.keys(pendingApprovals).length === 0) return
 
-  // ── On mount: restore pending approval state from backend ─────
-  // If the user refreshes while a prod approval is still pending,
-  // this re-hydrates pendingApprovals so the badge and disabled
-  // state are restored without needing to click Deploy again.
+    const iv = setInterval(async () => {
+      const current = pendingApprovalsRef.current
+      if (Object.keys(current).length === 0) return
+
+      for (const [env, approvalId] of Object.entries(current)) {
+        try {
+          const approval = await fetchApprovalById(approvalId)
+
+          if (approval.status === "rejected") {
+            // Clear badge and notify user
+            setPendingApprovals(prev => {
+              const next = { ...prev }
+              delete next[env]
+              return next
+            })
+            alert(`Production deployment for ${serviceName} was rejected by admin`)
+
+          } else if (approval.status === "approved" && approval.runId) {
+            // Clear badge and open pipeline view immediately
+            setPendingApprovals(prev => {
+              const next = { ...prev }
+              delete next[env]
+              return next
+            })
+            openPipelineView(approval.runId, env)
+          }
+          // status === "pending" → keep polling
+        } catch (err) {
+          // Network error — keep polling, don't clear badge
+          console.warn("[APPROVAL POLL] fetch failed, will retry:", err.message)
+        }
+      }
+    }, APPROVAL_POLL_MS)
+
+    return () => clearInterval(iv)
+  // Re-create the interval whenever the set of pending approvals changes
+  // (e.g. a new env becomes pending, or one resolves)
+  }, [pendingApprovals, serviceName, openPipelineView])
+
+  // ── On mount: restore pending approvals from backend ──────────
   useEffect(() => {
     async function restorePendingApprovals() {
       try {
         const allApprovals = await fetchProdApprovals()
         if (!Array.isArray(allApprovals)) return
 
-        // Find the most recent pending approval for THIS service
         const restoredPending = {}
         for (const approval of allApprovals) {
           if (
             approval.serviceName === serviceName &&
             approval.status === "pending"
           ) {
-            // Use prod as the env key — approvals are always prod
             restoredPending["prod"] = approval.id
-            break // take the most recent one (list is ordered DESC)
+            break
           }
         }
-
         if (Object.keys(restoredPending).length > 0) {
           setPendingApprovals(restoredPending)
         }
@@ -312,9 +364,13 @@ export default function ServiceDashboard() {
     restorePendingApprovals()
   }, [serviceName])
 
-  // ── Poll dashboard + active pipelines + approval status ──────
+  // ── Poll dashboard + active pipelines ────────────────────────
+  // NOTE: approval resolution has been moved to the dedicated
+  // approval poller above. This loop only updates dashboard data
+  // and running-pipeline state.
   useEffect(() => {
     let mounted = true
+
     async function load() {
       try {
         const data = await fetchServiceDashboard(serviceName)
@@ -322,10 +378,11 @@ export default function ServiceDashboard() {
         setDashboard(data)
         setLastUpdated(new Date())
 
-        // Check each env for an active pipeline run → disable deploy button
+        // Check each env for an active pipeline run
         const allEnvs = data?.environments
           ? Object.keys(data.environments)
           : DEFAULT_ENVS
+
         const newRunningEnvs = {}
         for (const env of allEnvs) {
           try {
@@ -333,49 +390,17 @@ export default function ServiceDashboard() {
             const isActive = latest?.status === "pending" || latest?.status === "running"
             if (isActive) newRunningEnvs[env] = true
           } catch {
-            // no run yet for this env — fine
+            // No run yet for this env — fine
           }
         }
         if (mounted) setRunningEnvs(newRunningEnvs)
-
-        // For every env with a pending approval badge, poll the approval row.
-        // Clear the badge only when admin approves (+ runId exists) or rejects.
-        const pending = pendingApprovalsRef.current
-        for (const env of Object.keys(pending)) {
-          const approvalId = pending[env]
-          try {
-            const approval = await fetchApprovalById(approvalId)
-            if (!mounted) break
-
-            if (approval.status === "rejected") {
-              setPendingApprovals(prev => {
-                const next = { ...prev }
-                delete next[env]
-                return next
-              })
-              alert(`Production deployment for ${serviceName} was rejected`)
-
-            } else if (approval.status === "approved" && approval.runId) {
-              setPendingApprovals(prev => {
-                const next = { ...prev }
-                delete next[env]
-                return next
-              })
-              setPipelineRunId(approval.runId)
-              setPipelineEnv(env)
-              setShowPipeline(true)
-            }
-            // status === "pending" → do nothing, keep badge, keep polling
-          } catch {
-            // fetch failed — keep badge, retry next tick
-          }
-        }
       } catch {
         if (mounted) setDashboard(null)
       } finally {
         if (mounted) setLoading(false)
       }
     }
+
     load()
     const iv = setInterval(load, POLL_INTERVAL_MS)
     return () => { mounted = false; clearInterval(iv) }
@@ -406,35 +431,12 @@ export default function ServiceDashboard() {
     return null
   }
 
-  // Polls approval row every 3s — used as the primary approval waiter
-  // after a fresh Deploy click. The dashboard poll loop is the fallback
-  // that also handles the refresh-restore case.
-  async function waitForApproval(approvalId) {
-    for (let attempt = 0; attempt < 60; attempt++) {
-      await new Promise(r => setTimeout(r, 3000))
-      try {
-        const approval = await fetchApprovalById(approvalId)
-        if (approval.status === "rejected") {
-          throw new Error("Deployment was rejected by admin")
-        }
-        if (approval.status === "approved" && approval.runId) {
-          return approval.runId
-        }
-      } catch (err) {
-        if (err.message === "Deployment was rejected by admin") throw err
-        console.warn("Polling approval status...", err.message)
-      }
-    }
-    throw new Error("Approval timed out — no response after 3 minutes")
-  }
-
-  function openPipelineView(runId, env) {
-    setPipelineRunId(runId)
-    setPipelineEnv(env)
-    setShowPipeline(true)
-  }
-
-  // ── Deploy → open pipeline panel ─────────────────────────────
+  // ── Deploy handler ────────────────────────────────────────────
+  // For PROD: triggers deploy, stores approvalId in pendingApprovals,
+  // then exits. The dedicated approval poller (above) handles the rest
+  // automatically — no more parallel waitForApproval() race.
+  //
+  // For DEV/TEST: same as before — wait for runId then open pipeline.
   const handleDeploy = async (env) => {
     if (deploying[env] || pendingApprovals[env] || runningEnvs[env]) return
 
@@ -449,14 +451,12 @@ export default function ServiceDashboard() {
         const approvalId = res.approvalId
         console.log("[DEPLOY] Prod pending approval approvalId=", approvalId)
 
-        setDeploying(prev => ({ ...prev, [env]: false }))
+        // Store the approvalId — the dedicated approval poller will
+        // detect approval/rejection and open the pipeline automatically.
         setPendingApprovals(prev => ({ ...prev, [env]: approvalId }))
 
-        // waitForApproval runs in parallel with the dashboard poll loop.
-        // Whichever fires first will open the pipeline view.
-        const runId = await waitForApproval(approvalId)
-        setPendingApprovals(prev => { const n = { ...prev }; delete n[env]; return n })
-        openPipelineView(runId, env)
+        // Done — do NOT call waitForApproval here anymore.
+        // That was the source of the race condition.
         return
       }
 
@@ -481,11 +481,7 @@ export default function ServiceDashboard() {
     try {
       const run = await fetchLatestPipelineRun(serviceName, env)
       const id  = run?.id ?? run?.runId ?? run?.run_id
-      if (id) {
-        setPipelineRunId(id)
-        setPipelineEnv(env)
-        setShowPipeline(true)
-      }
+      if (id) openPipelineView(id, env)
     } catch {
       alert("No pipeline runs found for " + env)
     }
