@@ -140,7 +140,7 @@ func RollbackService(w http.ResponseWriter, r *http.Request) {
 			Action: "rollback", ResourceType: "deployment",
 			ResourceName: serviceName, Environment: req.Environment,
 			Status:  "failed",
-			Details: fmt.Sprintf("Failed to create pipeline run: %v", err),
+			Details:"failed to create the rollback pipeline",
 		})
 		http.Error(w, "failed to create pipeline run", http.StatusInternalServerError)
 		return
