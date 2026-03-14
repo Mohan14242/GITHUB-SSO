@@ -3,7 +3,7 @@ import {
   fetchProdApprovals,
   approveDeployment,
   rejectDeployment,
-} from "../api/approvalApi"
+} from "../api/approvals"
 
 const POLL_INTERVAL_MS = 8000
 
