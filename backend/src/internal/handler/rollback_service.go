@@ -165,9 +165,9 @@ func RollbackService(w http.ResponseWriter, r *http.Request) {
 	// Trigger rollback via CICD
 	switch cicdType {
 	case "jenkins":
-		err = cicd.TriggerJenkinsRollback(serviceName, req.Environment, req.Version, runID)
+		err = cicd.TriggerJenkinsRollback(serviceName, branch, req.Version, runID)
 	case "github":
-		err = cicd.TriggerGitHubRollback(repo, req.Environment, req.Version, runID)
+		err = cicd.TriggerGitHubRollback(repo, branch, req.Version, runID)
 	default:
 		audit.Log(r, audit.Entry{
 			Action: "rollback", ResourceType: "deployment",
