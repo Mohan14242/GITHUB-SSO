@@ -649,6 +649,7 @@ export default function ServiceDashboard() {
             serviceName={serviceName}
             dashboard={dashboard}
             onRollbackSuccess={openPipelineView}
+            runningEnvs={runningEnvs}
           />
         </div>
       )}

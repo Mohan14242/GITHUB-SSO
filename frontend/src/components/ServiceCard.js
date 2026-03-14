@@ -3,7 +3,6 @@ import {
   fetchArtifactsByEnv,
   rollbackService,
 } from "../api/serviceApi"
-// ── CHANGE 1: import fetchLatestPipelineRun for runId fallback polling ──
 import { fetchLatestPipelineRun } from "../api/pipelineApi"
 
 const ENV_CFG = {
@@ -12,9 +11,6 @@ const ENV_CFG = {
   prod: { color: "#10b981", bg: "#001a0f", label: "Production"  },
 }
 
-// ── CHANGE 2: stage names that Jenkins sends via notifyStage()
-//    when ROLLBACK=true. Must match exactly what the backend
-//    creates in pipeline_stages (via rollbackStages() in pipeline.go).
 export const ROLLBACK_STAGE_FILTER = ["Rollback", "Health Check"]
 
 function Spinner({ color = "#6366f1", size = 12 }) {
@@ -30,12 +26,14 @@ function Spinner({ color = "#6366f1", size = 12 }) {
   )
 }
 
-// ── CHANGE 3: accept onRollbackSuccess prop ──
-// ServiceDashboard passes openPipelineView as onRollbackSuccess.
-// After a successful rollback we call:
-//   onRollbackSuccess(runId, selectedEnv, ROLLBACK_STAGE_FILTER)
-// which opens PipelineView showing only Rollback + Health Check stages.
-export default function ServiceCard({ serviceName, dashboard, onRollbackSuccess }) {
+// ── CHANGE: accept runningEnvs prop ──────────────────────────────
+// runningEnvs: { dev: true, prod: true, ... } — same object that
+// ServiceDashboard uses to disable deploy buttons in EnvCard.
+// We use it here to:
+//   1. Disable env selector buttons when that env has a running pipeline
+//   2. Disable the rollback button when the selected env is running
+//   3. Show a "Pipeline running" banner above the rollback button
+export default function ServiceCard({ serviceName, dashboard, onRollbackSuccess, runningEnvs = {} }) {
   const [selectedEnv,      setSelectedEnv]      = useState("")
   const [artifacts,        setArtifacts]        = useState([])
   const [selectedVersion,  setSelectedVersion]  = useState("")
@@ -48,7 +46,8 @@ export default function ServiceCard({ serviceName, dashboard, onRollbackSuccess 
 
   /* ── ENV SELECT → LOAD ARTIFACTS ── */
   const handleEnvSelect = async (env) => {
-    if (loadingArtifacts || rollingBack) return
+    // Also blocked if pipeline is running for that env
+    if (loadingArtifacts || rollingBack || runningEnvs[env]) return
     setSelectedEnv(env)
     setSelectedVersion("")
     setArtifacts([])
@@ -71,6 +70,11 @@ export default function ServiceCard({ serviceName, dashboard, onRollbackSuccess 
   /* ── ROLLBACK ── */
   const handleRollback = async () => {
     if (!selectedEnv || !selectedVersion) return
+    // Extra guard: block if pipeline just started running since env was selected
+    if (runningEnvs[selectedEnv]) {
+      setRollbackError("A pipeline is already running for this environment. Please wait for it to finish.")
+      return
+    }
     const currentVersion = dashboard.environments[selectedEnv]?.currentVersion
     if (selectedVersion === currentVersion) {
       setRollbackError("This version is already running in the selected environment.")
@@ -80,19 +84,13 @@ export default function ServiceCard({ serviceName, dashboard, onRollbackSuccess 
     setRollbackSuccess(false)
     setRollbackError("")
     try {
-      // Backend returns { runId, message }
       const res = await rollbackService(serviceName, {
         environment: selectedEnv,
         version: selectedVersion,
       })
 
-      // ── CHANGE 4: extract runId and open pipeline view ──
-      // The backend's RollbackService handler returns { "runId": N }
-      // The pipeline run was created with CreateRollbackPipelineRun
-      // so it already has only "Rollback" and "Health Check" stages.
       let runId = res?.runId ?? res?.run_id ?? res?.id ?? null
 
-      // Fallback: if backend didn't return runId, poll for it
       if (!runId) {
         await new Promise(r => setTimeout(r, 2000))
         try {
@@ -105,8 +103,6 @@ export default function ServiceCard({ serviceName, dashboard, onRollbackSuccess 
 
       setRollbackSuccess(true)
 
-      // Open pipeline view after a short delay so user sees the
-      // success banner briefly before the panel slides in
       if (runId && onRollbackSuccess) {
         setTimeout(() => {
           onRollbackSuccess(runId, selectedEnv, ROLLBACK_STAGE_FILTER)
@@ -120,9 +116,12 @@ export default function ServiceCard({ serviceName, dashboard, onRollbackSuccess 
     }
   }
 
-  const selectedCfg       = ENV_CFG[selectedEnv] ?? { color: "#6366f1", bg: "#0d0f2e" }
-  const currentVersion    = dashboard.environments[selectedEnv]?.currentVersion
-  const isReadyToRollback = !!selectedVersion && !rollingBack && selectedVersion !== currentVersion
+  const selectedCfg         = ENV_CFG[selectedEnv] ?? { color: "#6366f1", bg: "#0d0f2e" }
+  const currentVersion       = dashboard.environments[selectedEnv]?.currentVersion
+  const selectedEnvRunning   = !!runningEnvs[selectedEnv]
+  // Rollback is ready only when: version chosen + not rolling back +
+  // not same as current + no pipeline already running in that env
+  const isReadyToRollback    = !!selectedVersion && !rollingBack && selectedVersion !== currentVersion && !selectedEnvRunning
 
   /* ── RENDER ── */
   return (
@@ -167,7 +166,6 @@ export default function ServiceCard({ serviceName, dashboard, onRollbackSuccess 
           </div>
         </div>
 
-        {/* Owner + Runtime pills */}
         <div style={{ display: "flex", gap: 8 }}>
           {dashboard.ownerTeam && (
             <span style={{
@@ -203,27 +201,33 @@ export default function ServiceCard({ serviceName, dashboard, onRollbackSuccess 
           </div>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             {environments.map((env) => {
-              const cfg     = ENV_CFG[env] ?? { color: "#6366f1", bg: "#0d0f2e" }
-              const isActive = selectedEnv === env
+              const cfg           = ENV_CFG[env] ?? { color: "#6366f1", bg: "#0d0f2e" }
+              const isActive      = selectedEnv === env
+              const envPipeline   = !!runningEnvs[env]
+              // Button is blocked if: loading artifacts, rolling back,
+              // OR a pipeline is already running for this env
+              const isBlocked     = loadingArtifacts || rollingBack || envPipeline
+
               return (
                 <button
                   key={env}
                   onClick={() => handleEnvSelect(env)}
-                  disabled={loadingArtifacts || rollingBack}
+                  disabled={isBlocked}
+                  title={envPipeline ? `Pipeline running in ${env} — rollback disabled` : undefined}
                   style={{
                     padding: "8px 18px", borderRadius: 8,
-                    border: `1px solid ${isActive ? cfg.color + "88" : cfg.color + "33"}`,
+                    border: `1px solid ${isActive ? cfg.color + "88" : envPipeline ? cfg.color + "22" : cfg.color + "33"}`,
                     background: isActive ? cfg.color + "22" : cfg.bg,
-                    color: isActive ? cfg.color : cfg.color + "88",
+                    color: isActive ? cfg.color : envPipeline ? cfg.color + "44" : cfg.color + "88",
                     fontWeight: 700, fontSize: 12,
-                    cursor: loadingArtifacts || rollingBack ? "not-allowed" : "pointer",
+                    cursor: isBlocked ? "not-allowed" : "pointer",
                     transition: "all 0.15s",
                     letterSpacing: "0.06em",
-                    opacity: loadingArtifacts || rollingBack ? 0.5 : 1,
+                    opacity: isBlocked && !isActive ? 0.45 : 1,
                     display: "flex", alignItems: "center", gap: 7,
                   }}
                   onMouseEnter={e => {
-                    if (!loadingArtifacts && !rollingBack && !isActive) {
+                    if (!isBlocked && !isActive) {
                       e.currentTarget.style.background = cfg.color + "15"
                       e.currentTarget.style.borderColor = cfg.color + "66"
                       e.currentTarget.style.color = cfg.color
@@ -232,21 +236,30 @@ export default function ServiceCard({ serviceName, dashboard, onRollbackSuccess 
                   onMouseLeave={e => {
                     if (!isActive) {
                       e.currentTarget.style.background = cfg.bg
-                      e.currentTarget.style.borderColor = cfg.color + "33"
-                      e.currentTarget.style.color = cfg.color + "88"
+                      e.currentTarget.style.borderColor = envPipeline ? cfg.color + "22" : cfg.color + "33"
+                      e.currentTarget.style.color = envPipeline ? cfg.color + "44" : cfg.color + "88"
                     }
                   }}
                 >
-                  {isActive && loadingArtifacts
-                    ? <Spinner color={cfg.color} size={10}/>
-                    : (
-                      <span style={{
-                        width: 6, height: 6, borderRadius: "50%",
-                        background: isActive ? cfg.color : cfg.color + "55",
-                        display: "inline-block", flexShrink: 0,
-                      }}/>
-                    )
-                  }
+                  {/* Show spinner for active env loading, pipeline dot for running, regular dot otherwise */}
+                  {isActive && loadingArtifacts ? (
+                    <Spinner color={cfg.color} size={10}/>
+                  ) : envPipeline ? (
+                    <span style={{
+                      width: 6, height: 6, borderRadius: "50%",
+                      background: cfg.color + "44",
+                      display: "inline-block", flexShrink: 0,
+                      animation: "sc-spin 1s linear infinite",
+                      border: `1px solid ${cfg.color}66`,
+                      borderTop: `1px solid ${cfg.color}`,
+                    }}/>
+                  ) : (
+                    <span style={{
+                      width: 6, height: 6, borderRadius: "50%",
+                      background: isActive ? cfg.color : cfg.color + "55",
+                      display: "inline-block", flexShrink: 0,
+                    }}/>
+                  )}
                   {env.toUpperCase()}
                 </button>
               )
@@ -294,6 +307,30 @@ export default function ServiceCard({ serviceName, dashboard, onRollbackSuccess 
               </span>
             </div>
 
+            {/* ── Pipeline running banner for selected env ── */}
+            {selectedEnvRunning && (
+              <div style={{
+                background: "#1a1000",
+                border: `1px solid ${selectedCfg.color}33`,
+                borderRadius: 8, padding: "10px 14px",
+                marginBottom: 16,
+                display: "flex", alignItems: "center", gap: 8,
+                fontSize: 11, color: selectedCfg.color,
+                animation: "sc-fadeIn 0.15s ease both",
+              }}>
+                <span style={{
+                  width: 7, height: 7, borderRadius: "50%",
+                  background: selectedCfg.color, flexShrink: 0,
+                  animation: "sc-spin 1s linear infinite",
+                  border: `1px solid ${selectedCfg.color}`,
+                  borderTopColor: "transparent",
+                }}/>
+                <span>
+                  Pipeline is running in <strong>{selectedEnv}</strong> — rollback disabled until it completes
+                </span>
+              </div>
+            )}
+
             {/* Step 2 label */}
             <div style={{
               fontSize: 10, color: "#334155", fontWeight: 700,
@@ -307,7 +344,7 @@ export default function ServiceCard({ serviceName, dashboard, onRollbackSuccess 
             <div style={{ position: "relative", marginBottom: 16 }}>
               <select
                 value={selectedVersion}
-                disabled={loadingArtifacts}
+                disabled={loadingArtifacts || selectedEnvRunning}
                 onChange={e => {
                   setSelectedVersion(e.target.value)
                   setRollbackSuccess(false)
@@ -317,20 +354,22 @@ export default function ServiceCard({ serviceName, dashboard, onRollbackSuccess 
                   width: "100%",
                   padding: "10px 36px 10px 14px",
                   background: "#060b12",
-                  border: `1px solid ${selectedVersion ? selectedCfg.color + "55" : "#1e293b"}`,
+                  border: `1px solid ${selectedVersion && !selectedEnvRunning ? selectedCfg.color + "55" : "#1e293b"}`,
                   borderRadius: 8,
                   color: selectedVersion ? "#e2e8f0" : "#475569",
                   fontSize: 13, fontFamily: "monospace",
                   outline: "none",
-                  cursor: loadingArtifacts ? "not-allowed" : "pointer",
+                  cursor: loadingArtifacts || selectedEnvRunning ? "not-allowed" : "pointer",
                   appearance: "none",
                   transition: "border-color 0.15s",
-                  opacity: loadingArtifacts ? 0.6 : 1,
+                  opacity: loadingArtifacts || selectedEnvRunning ? 0.5 : 1,
                 }}
               >
                 <option value="">
                   {loadingArtifacts
                     ? "Loading versions…"
+                    : selectedEnvRunning
+                    ? "Pipeline running — wait for it to finish"
                     : artifacts.length === 0
                     ? "No versions available"
                     : "Select a version to rollback to"}
@@ -351,7 +390,6 @@ export default function ServiceCard({ serviceName, dashboard, onRollbackSuccess 
                 })}
               </select>
 
-              {/* Chevron icon */}
               <svg
                 width="12" height="12" fill="none" stroke="#475569"
                 strokeWidth="2" viewBox="0 0 24 24"
@@ -376,8 +414,8 @@ export default function ServiceCard({ serviceName, dashboard, onRollbackSuccess 
               </div>
             )}
 
-            {/* Selected version preview — also shows which stages will run */}
-            {selectedVersion && selectedVersion !== currentVersion && (
+            {/* Selected version preview */}
+            {selectedVersion && selectedVersion !== currentVersion && !selectedEnvRunning && (
               <div style={{
                 background: "#0a0a14",
                 border: `1px solid ${selectedCfg.color}33`,
@@ -399,7 +437,6 @@ export default function ServiceCard({ serviceName, dashboard, onRollbackSuccess 
                     </div>
                   </div>
                 </div>
-                {/* Pipeline stages hint */}
                 <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4 }}>
                   <div style={{ fontSize: 9, color: "#334155", fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase" }}>
                     Pipeline stages
@@ -455,6 +492,11 @@ export default function ServiceCard({ serviceName, dashboard, onRollbackSuccess 
                 <>
                   <Spinner color={selectedCfg.color} size={13}/>
                   Rolling back…
+                </>
+              ) : selectedEnvRunning ? (
+                <>
+                  <Spinner color="#334155" size={13}/>
+                  Pipeline Running…
                 </>
               ) : (
                 <>
