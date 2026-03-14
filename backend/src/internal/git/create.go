@@ -19,16 +19,6 @@ var githubClient = &http.Client{
 	Timeout: 15 * time.Second,
 }
 
-// getOrgName returns the GitHub organisation name from the environment
-func getOrgName() (string, error) {
-	org := os.Getenv("GITHUB_ORG")
-	if org == "" {
-		log.Println("[GIT][ERROR] GITHUB_ORG environment variable is not set")
-		return "", fmt.Errorf("GITHUB_ORG environment variable is not set")
-	}
-	log.Printf("[GIT] org resolved: %s", org)
-	return org, nil
-}
 
 // repoExistsInOrg checks if a repo exists AND is owned by the given org.
 // Unlike RepoExists, this will return false if the repo exists only in a
