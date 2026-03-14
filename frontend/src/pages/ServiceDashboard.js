@@ -264,71 +264,48 @@ function StatBox({ label, value, color = "#6366f1" }) {
 export default function ServiceDashboard() {
   const { serviceName } = useParams()
 
-  const [dashboard,        setDashboard]        = useState(null)
-  const [deploying,        setDeploying]        = useState({})
-  const [loading,          setLoading]          = useState(true)
-  const [showPipeline,     setShowPipeline]     = useState(false)
-  const [pipelineRunId,    setPipelineRunId]    = useState(null)
-  const [pipelineEnv,      setPipelineEnv]      = useState(null)
-  const [lastUpdated,      setLastUpdated]      = useState(null)
-  const [pendingApprovals, setPendingApprovals] = useState({})
-  const [runningEnvs,      setRunningEnvs]      = useState({})
+  const [dashboard,           setDashboard]           = useState(null)
+  const [deploying,           setDeploying]           = useState({})
+  const [loading,             setLoading]             = useState(true)
+  const [showPipeline,        setShowPipeline]        = useState(false)
+  const [pipelineRunId,       setPipelineRunId]       = useState(null)
+  const [pipelineEnv,         setPipelineEnv]         = useState(null)
+  // ── CHANGE 1: new state — null means show all stages (normal deploy)
+  //              string[] means show only those stages (rollback)
+  const [pipelineStageFilter, setPipelineStageFilter] = useState(null)
+  const [lastUpdated,         setLastUpdated]         = useState(null)
+  const [pendingApprovals,    setPendingApprovals]    = useState({})
+  const [runningEnvs,         setRunningEnvs]         = useState({})
 
-  // ── CHANGE 1 of 3 ─────────────────────────────────────────────
-  // Added three new refs. The approval poller reads ONLY from refs
-  // so it can never go stale and React re-renders / useEffect
-  // cleanup cycles can never kill it mid-execution.
-  // showPipelineRef is kept from original (no change there).
   const pendingApprovalsRef = useRef({})
   const showPipelineRef     = useRef(false)
-  const serviceNameRef      = useRef(serviceName)   // ← NEW
-  const setPendingRef       = useRef(null)           // ← NEW: ref to state setter
-  const openPipelineRef     = useRef(null)           // ← NEW: ref to openPipelineView
+  const serviceNameRef      = useRef(serviceName)
+  const setPendingRef       = useRef(null)
+  const openPipelineRef     = useRef(null)
 
   useEffect(() => { pendingApprovalsRef.current = pendingApprovals }, [pendingApprovals])
   useEffect(() => { showPipelineRef.current     = showPipeline     }, [showPipeline])
-  useEffect(() => { serviceNameRef.current      = serviceName      }, [serviceName]) // ← NEW
+  useEffect(() => { serviceNameRef.current      = serviceName      }, [serviceName])
 
-  // ── openPipelineView (unchanged) ─────────────────────────────
-  const openPipelineView = useCallback((runId, env) => {
+  // ── CHANGE 2: openPipelineView now accepts optional stageFilter ──
+  // Normal deploy calls: openPipelineView(runId, env)          → stageFilter = null → all stages shown
+  // Rollback calls:      openPipelineView(runId, env, filter)  → only filter stages shown
+  const openPipelineView = useCallback((runId, env, stageFilter = null) => {
     setPipelineRunId(runId)
     setPipelineEnv(env)
+    setPipelineStageFilter(stageFilter)
     setShowPipeline(true)
   }, [])
 
-  // ── CHANGE 2 of 3 ─────────────────────────────────────────────
-  // Wire setPendingRef and openPipelineRef once on mount.
-  // These never change so one assignment is enough.
   useEffect(() => {
     setPendingRef.current   = setPendingApprovals
     openPipelineRef.current = openPipelineView
   }, [openPipelineView])
 
-  // ── CHANGE 3 of 3 — THE CORE FIX ─────────────────────────────
-  // OLD approval poller (REMOVE THIS ENTIRE BLOCK):
-  //
-  //   useEffect(() => {
-  //     if (Object.keys(pendingApprovals).length === 0) return
-  //     const iv = setInterval(async () => { ... }, APPROVAL_POLL_MS)
-  //     return () => clearInterval(iv)
-  //   }, [pendingApprovals, serviceName, openPipelineView])  ← BAD deps
-  //
-  // WHY IT WAS BROKEN:
-  //   The deps array [pendingApprovals, ...] meant every time
-  //   setPendingApprovals() was called inside the interval, React
-  //   would immediately run the cleanup (clearInterval) and recreate
-  //   the interval — killing it before openPipelineView() could fire.
-  //
-  // NEW approval poller (REPLACE WITH THIS):
-  //   • Empty deps [] → started ONCE on mount, never recreated.
-  //   • Reads ONLY from refs → immune to stale closures.
-  //   • Calls state setters via refs → React re-renders cannot
-  //     interrupt the execution between setPending and openPipeline.
   useEffect(() => {
     const iv = setInterval(async () => {
       const pending = pendingApprovalsRef.current
 
-      // Nothing pending this tick — skip
       if (Object.keys(pending).length === 0) return
 
       for (const [env, approvalId] of Object.entries(pending)) {
@@ -346,8 +323,6 @@ export default function ServiceDashboard() {
             )
 
           } else if (approval.status === "approved" && approval.runId) {
-            // Clear badge AND open pipeline in the same tick.
-            // Both calls go through refs so nothing can interrupt between them.
             setPendingRef.current(prev => {
               const next = { ...prev }
               delete next[env]
@@ -355,18 +330,15 @@ export default function ServiceDashboard() {
             })
             openPipelineRef.current(approval.runId, env)
           }
-          // "pending" → do nothing, poll again next tick
         } catch (err) {
           console.warn("[APPROVAL POLL] fetch error, will retry:", err.message)
         }
       }
     }, APPROVAL_POLL_MS)
 
-    // Only cleared when the component fully unmounts
     return () => clearInterval(iv)
-  }, [])  // ← EMPTY DEPS: this is the entire fix in one line
+  }, [])
 
-  // ── On mount: restore pending approvals (unchanged) ──────────
   useEffect(() => {
     async function restorePendingApprovals() {
       try {
@@ -388,7 +360,6 @@ export default function ServiceDashboard() {
     restorePendingApprovals()
   }, [serviceName])
 
-  // ── Dashboard + running-pipeline poller (unchanged) ──────────
   useEffect(() => {
     let mounted = true
 
@@ -424,7 +395,6 @@ export default function ServiceDashboard() {
     return () => { mounted = false; clearInterval(iv) }
   }, [serviceName])
 
-  // ── Helpers (unchanged) ───────────────────────────────────────
   async function triggerDeployment(env) {
     try {
       return await deployService(serviceName, env)
@@ -448,7 +418,6 @@ export default function ServiceDashboard() {
     return null
   }
 
-  // ── handleDeploy (prod path simplified — unchanged from last fix)
   const handleDeploy = async (env) => {
     if (deploying[env] || pendingApprovals[env] || runningEnvs[env]) return
 
@@ -457,13 +426,11 @@ export default function ServiceDashboard() {
     try {
       const res = await triggerDeployment(env)
 
-      // PROD: store approvalId and exit. Poller handles the rest.
       if (res?.status === "pending_approval") {
         setPendingApprovals(prev => ({ ...prev, [env]: res.approvalId }))
         return
       }
 
-      // DEV / TEST: open pipeline directly
       let runId = res?.runId ?? res?.run_id ?? res?.id ?? null
       await new Promise(r => setTimeout(r, 2000))
       if (!runId) runId = await waitForPipelineRun(env)
@@ -489,10 +456,12 @@ export default function ServiceDashboard() {
     }
   }
 
+  // ── CHANGE 3: closePipeline now also resets pipelineStageFilter ──
   const closePipeline = () => {
     setShowPipeline(false)
     setPipelineRunId(null)
     setPipelineEnv(null)
+    setPipelineStageFilter(null)
   }
 
   const envs         = dashboard?.environments
@@ -647,11 +616,13 @@ export default function ServiceDashboard() {
               animation: "slideIn 0.25s ease both",
               position: "sticky", top: 28,
             }}>
+              {/* ── CHANGE 4: pass stageFilter to PipelineView ── */}
               <PipelineView
                 runId={pipelineRunId}
                 serviceName={serviceName}
                 environment={pipelineEnv}
                 onClose={closePipeline}
+                stageFilter={pipelineStageFilter}
               />
             </div>
           )}

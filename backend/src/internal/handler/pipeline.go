@@ -36,6 +36,7 @@ type PipelineRun struct {
 	Stages        []PipelineStage `json:"stages"`
 }
 
+// ── defaultStages returns stage names for a normal deploy pipeline ──
 func defaultStages(cicdType string) []string {
 	switch strings.ToLower(cicdType) {
 	case "jenkins":
@@ -51,29 +52,50 @@ func defaultStages(cicdType string) []string {
 	}
 }
 
-// ── CreatePipelineRun ────────────────────────────────────────────
-func CreatePipelineRun(serviceName, environment, triggeredBy, cicdType string) (int64, error) {
-	log.Printf("[PIPELINE] CreatePipelineRun called serviceName=%s environment=%s triggeredBy=%s cicdType=%s",
-		serviceName, environment, triggeredBy, cicdType)
+// ── NEW: rollbackStages returns stage names for a rollback pipeline ──
+// These match the Jenkins pipeline exactly when ROLLBACK=true:
+//   - "Rollback" stage runs  (params.ROLLBACK == true)
+//   - "Health Check" always runs
+// Build, Test, Push Image, Deploy are skipped by Jenkins
+// when { expression { !params.ROLLBACK } } guards.
+func rollbackStages() []string {
+	return []string{
+		"Rollback", "Health Check",
+	}
+}
+
+// ── NEW: createRun is the shared internal implementation ──────────
+// isRollback=false → uses defaultStages (7 stages: normal deploy)
+// isRollback=true  → uses rollbackStages (2 stages: Rollback + Health Check)
+func createRun(serviceName, environment, triggeredBy, cicdType string, isRollback bool) (int64, error) {
+	log.Printf("[PIPELINE] createRun called serviceName=%s environment=%s triggeredBy=%s cicdType=%s isRollback=%v",
+		serviceName, environment, triggeredBy, cicdType, isRollback)
 
 	res, err := db.DB.Exec(`
 		INSERT INTO pipeline_runs (service_name, environment, status, triggered_by, cicd_type)
 		VALUES (?, ?, 'pending', ?, ?)
 	`, serviceName, environment, triggeredBy, cicdType)
 	if err != nil {
-		log.Printf("[PIPELINE] CreatePipelineRun insert error: %v", err)
+		log.Printf("[PIPELINE] createRun insert error: %v", err)
 		return 0, err
 	}
 
 	runID, err := res.LastInsertId()
 	if err != nil {
-		log.Printf("[PIPELINE] CreatePipelineRun LastInsertId error: %v", err)
+		log.Printf("[PIPELINE] createRun LastInsertId error: %v", err)
 		return 0, err
 	}
 
 	log.Printf("[PIPELINE] run row inserted id=%d", runID)
 
-	stages := defaultStages(cicdType)
+	// Choose stages based on run type
+	var stages []string
+	if isRollback {
+		stages = rollbackStages()
+	} else {
+		stages = defaultStages(cicdType)
+	}
+
 	for i, name := range stages {
 		_, err := db.DB.Exec(`
 			INSERT INTO pipeline_stages (run_id, stage_name, stage_order, status)
@@ -86,9 +108,28 @@ func CreatePipelineRun(serviceName, environment, triggeredBy, cicdType string) (
 		}
 	}
 
-	log.Printf("[PIPELINE] created run id=%d service=%s env=%s stages=%d",
-		runID, serviceName, environment, len(stages))
+	log.Printf("[PIPELINE] created run id=%d service=%s env=%s stages=%d isRollback=%v",
+		runID, serviceName, environment, len(stages), isRollback)
 	return runID, nil
+}
+
+// ── CreatePipelineRun creates a run with normal deploy stages ─────
+// Now delegates to createRun with isRollback=false.
+// Called by: DeployServices handler, ApproveDeployment handler.
+func CreatePipelineRun(serviceName, environment, triggeredBy, cicdType string) (int64, error) {
+	log.Printf("[PIPELINE] CreatePipelineRun called serviceName=%s environment=%s triggeredBy=%s cicdType=%s",
+		serviceName, environment, triggeredBy, cicdType)
+	return createRun(serviceName, environment, triggeredBy, cicdType, false)
+}
+
+// ── NEW: CreateRollbackPipelineRun creates a run with rollback stages ──
+// Called by: RollbackService handler.
+// The DB will only contain "Rollback" and "Health Check" stages for
+// this run — no phantom pending stages that Jenkins will never update.
+func CreateRollbackPipelineRun(serviceName, environment, triggeredBy, cicdType string) (int64, error) {
+	log.Printf("[PIPELINE] CreateRollbackPipelineRun called serviceName=%s environment=%s triggeredBy=%s cicdType=%s",
+		serviceName, environment, triggeredBy, cicdType)
+	return createRun(serviceName, environment, triggeredBy, cicdType, true)
 }
 
 // ── loadRun loads a full PipelineRun with stages from DB ─────────
@@ -303,7 +344,7 @@ func GetLatestPipelineRun(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "no pipeline runs found", http.StatusNotFound)
 		return
 	}
-    
+
 	log.Printf("[PIPELINE] GetLatestPipelineRun found runID=%d", runID)
 
 	run, err := loadRun(fmt.Sprintf("%d", runID))

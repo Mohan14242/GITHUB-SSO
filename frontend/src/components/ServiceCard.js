@@ -3,12 +3,19 @@ import {
   fetchArtifactsByEnv,
   rollbackService,
 } from "../api/serviceApi"
+// ── CHANGE 1: import fetchLatestPipelineRun for runId fallback polling ──
+import { fetchLatestPipelineRun } from "../api/pipelineApi"
 
 const ENV_CFG = {
   dev:  { color: "#6366f1", bg: "#0d0f2e", label: "Development" },
   test: { color: "#f59e0b", bg: "#1a1200", label: "Testing"     },
   prod: { color: "#10b981", bg: "#001a0f", label: "Production"  },
 }
+
+// ── CHANGE 2: stage names that Jenkins sends via notifyStage()
+//    when ROLLBACK=true. Must match exactly what the backend
+//    creates in pipeline_stages (via rollbackStages() in pipeline.go).
+export const ROLLBACK_STAGE_FILTER = ["Rollback", "Health Check"]
 
 function Spinner({ color = "#6366f1", size = 12 }) {
   return (
@@ -23,7 +30,12 @@ function Spinner({ color = "#6366f1", size = 12 }) {
   )
 }
 
-export default function ServiceCard({ serviceName, dashboard }) {
+// ── CHANGE 3: accept onRollbackSuccess prop ──
+// ServiceDashboard passes openPipelineView as onRollbackSuccess.
+// After a successful rollback we call:
+//   onRollbackSuccess(runId, selectedEnv, ROLLBACK_STAGE_FILTER)
+// which opens PipelineView showing only Rollback + Health Check stages.
+export default function ServiceCard({ serviceName, dashboard, onRollbackSuccess }) {
   const [selectedEnv,      setSelectedEnv]      = useState("")
   const [artifacts,        setArtifacts]        = useState([])
   const [selectedVersion,  setSelectedVersion]  = useState("")
@@ -68,11 +80,38 @@ export default function ServiceCard({ serviceName, dashboard }) {
     setRollbackSuccess(false)
     setRollbackError("")
     try {
-      await rollbackService(serviceName, {
+      // Backend returns { runId, message }
+      const res = await rollbackService(serviceName, {
         environment: selectedEnv,
         version: selectedVersion,
       })
+
+      // ── CHANGE 4: extract runId and open pipeline view ──
+      // The backend's RollbackService handler returns { "runId": N }
+      // The pipeline run was created with CreateRollbackPipelineRun
+      // so it already has only "Rollback" and "Health Check" stages.
+      let runId = res?.runId ?? res?.run_id ?? res?.id ?? null
+
+      // Fallback: if backend didn't return runId, poll for it
+      if (!runId) {
+        await new Promise(r => setTimeout(r, 2000))
+        try {
+          const latest = await fetchLatestPipelineRun(serviceName, selectedEnv)
+          runId = latest?.id ?? latest?.runId ?? latest?.run_id ?? null
+        } catch {
+          console.warn("[ROLLBACK] Could not fetch pipeline run id")
+        }
+      }
+
       setRollbackSuccess(true)
+
+      // Open pipeline view after a short delay so user sees the
+      // success banner briefly before the panel slides in
+      if (runId && onRollbackSuccess) {
+        setTimeout(() => {
+          onRollbackSuccess(runId, selectedEnv, ROLLBACK_STAGE_FILTER)
+        }, 800)
+      }
     } catch (err) {
       console.error("[ERROR] Rollback failed", err)
       setRollbackError("Rollback failed to start. Please try again.")
@@ -81,8 +120,8 @@ export default function ServiceCard({ serviceName, dashboard }) {
     }
   }
 
-  const selectedCfg     = ENV_CFG[selectedEnv] ?? { color: "#6366f1", bg: "#0d0f2e" }
-  const currentVersion  = dashboard.environments[selectedEnv]?.currentVersion
+  const selectedCfg       = ENV_CFG[selectedEnv] ?? { color: "#6366f1", bg: "#0d0f2e" }
+  const currentVersion    = dashboard.environments[selectedEnv]?.currentVersion
   const isReadyToRollback = !!selectedVersion && !rollingBack && selectedVersion !== currentVersion
 
   /* ── RENDER ── */
@@ -337,25 +376,44 @@ export default function ServiceCard({ serviceName, dashboard }) {
               </div>
             )}
 
-            {/* Selected version preview */}
+            {/* Selected version preview — also shows which stages will run */}
             {selectedVersion && selectedVersion !== currentVersion && (
               <div style={{
                 background: "#0a0a14",
                 border: `1px solid ${selectedCfg.color}33`,
                 borderRadius: 8, padding: "10px 14px",
                 marginBottom: 16,
-                display: "flex", alignItems: "center", gap: 10,
+                display: "flex", alignItems: "center", justifyContent: "space-between",
                 animation: "sc-fadeIn 0.15s ease both",
               }}>
-                <svg width="14" height="14" fill="none" stroke={selectedCfg.color} strokeWidth="2" viewBox="0 0 24 24">
-                  <path d="M12 19V5M5 12l7-7 7 7"/>
-                </svg>
-                <div>
-                  <div style={{ fontSize: 9, color: "#334155", fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 2 }}>
-                    Rolling back to
+                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                  <svg width="14" height="14" fill="none" stroke={selectedCfg.color} strokeWidth="2" viewBox="0 0 24 24">
+                    <path d="M12 19V5M5 12l7-7 7 7"/>
+                  </svg>
+                  <div>
+                    <div style={{ fontSize: 9, color: "#334155", fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 2 }}>
+                      Rolling back to
+                    </div>
+                    <div style={{ fontFamily: "monospace", fontSize: 13, color: selectedCfg.color, fontWeight: 700 }}>
+                      {selectedVersion}
+                    </div>
                   </div>
-                  <div style={{ fontFamily: "monospace", fontSize: 13, color: selectedCfg.color, fontWeight: 700 }}>
-                    {selectedVersion}
+                </div>
+                {/* Pipeline stages hint */}
+                <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4 }}>
+                  <div style={{ fontSize: 9, color: "#334155", fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase" }}>
+                    Pipeline stages
+                  </div>
+                  <div style={{ display: "flex", gap: 5 }}>
+                    {ROLLBACK_STAGE_FILTER.map(s => (
+                      <span key={s} style={{
+                        padding: "2px 8px", borderRadius: 4,
+                        background: "#1e293b", border: "1px solid #334155",
+                        color: "#64748b", fontSize: 10, fontFamily: "monospace",
+                      }}>
+                        {s}
+                      </span>
+                    ))}
                   </div>
                 </div>
               </div>
@@ -420,10 +478,11 @@ export default function ServiceCard({ serviceName, dashboard }) {
                 <span style={{ fontSize: 16 }}>✅</span>
                 <div>
                   <div style={{ color: "#10b981", fontSize: 13, fontWeight: 700 }}>
-                    Rollback triggered successfully
+                    Rollback triggered — opening pipeline…
                   </div>
                   <div style={{ color: "#334155", fontSize: 11, marginTop: 2 }}>
                     {serviceName} ({selectedEnv}) → {selectedVersion}
+                    &nbsp;·&nbsp;running: Rollback, Health Check
                   </div>
                 </div>
               </div>

@@ -2,15 +2,16 @@ import { useState, useEffect, useRef } from "react"
 import { fetchPipelineRun, streamPipelineRun } from "../api/pipelineApi"
 
 const STAGE_ICONS = {
-  "Checkout":     "📥",
-  "Setup":        "⚙️",
-  "Build":        "🔨",
-  "Test":         "🧪",
-  "Docker Build": "🐳",
-  "Docker Push":  "📤",
-  "Push Image":   "📤",
-  "Deploy":       "🚀",
-  "Health Check": "❤️",
+  "Checkout":        "📥",
+  "Setup":           "⚙️",
+  "Build":           "🔨",
+  "Test":            "🧪",
+  "Docker Build":    "🐳",
+  "Docker Push":     "📤",
+  "Push Image":      "📤",
+  "Deploy":          "🚀",
+  "Health Check":    "❤️",
+  "Rollback":        "↩️",
 }
 
 const STATUS_CFG = {
@@ -39,7 +40,13 @@ function formatDuration(startedAt, completedAt) {
   return `${Math.floor(secs / 60)}m ${secs % 60}s`
 }
 
-export default function PipelineView({ runId, serviceName, environment, onClose }) {
+// ── CHANGE 1: accept stageFilter prop ────────────────────────────
+// stageFilter: optional string[] passed from ServiceDashboard.
+// When provided (rollback): only stages whose stageName is in the
+// list are rendered. The backend already creates only those stages
+// for a rollback run, so this mainly drives the badge + label.
+// When null/undefined (normal deploy): all stages are shown.
+export default function PipelineView({ runId, serviceName, environment, onClose, stageFilter }) {
   const [run,         setRun]         = useState(null)
   const [loading,     setLoading]     = useState(true)
   const [sseStatus,   setSseStatus]   = useState("connecting")
@@ -101,12 +108,23 @@ export default function PipelineView({ runId, serviceName, environment, onClose 
     return () => { cleanup(); clearInterval(timerRef.current) }
   }, [runId])
 
+  // ── CHANGE 2: compute visibleStages ──────────────────────────
+  // When stageFilter is provided, only show matching stages.
+  // For rollback runs the backend only creates 2 stages anyway
+  // ("Rollback" and "Health Check"), so this is mostly for safety
+  // and to drive the "Rollback view" badge in the header.
+  const visibleStages = run?.stages
+    ? (stageFilter?.length
+        ? run.stages.filter(s => stageFilter.includes(s.stageName))
+        : run.stages)
+    : []
+
   const runCfg       = run ? (RUN_STATUS_CFG[run.status] ?? RUN_STATUS_CFG.pending) : null
-  const successCount = run?.stages?.filter(s => s.status === "success").length ?? 0
-  const totalCount   = run?.stages?.length ?? 0
+  // ── CHANGE 3: use visibleStages for progress counts ──────────
+  const successCount = visibleStages.filter(s => s.status === "success").length
+  const totalCount   = visibleStages.length
   const progressPct  = totalCount > 0 ? (successCount / totalCount) * 100 : 0
 
-  // ── ROOT: fills parent container — no fixed/absolute/centering ──
   return (
     <div style={{
       height: "100%",
@@ -161,6 +179,18 @@ export default function PipelineView({ runId, serviceName, environment, onClose 
               : sseStatus === "error"     ? "FALLBACK"
               : "CONNECTING"}
             </span>
+
+            {/* ── CHANGE 4: rollback view badge in header ── */}
+            {stageFilter?.length > 0 && (
+              <span style={{
+                display: "flex", alignItems: "center", gap: 4,
+                padding: "2px 7px", borderRadius: 10,
+                background: "#1a0a30", border: "1px solid #6366f133",
+                color: "#6366f1", fontSize: 9,
+              }}>
+                ↩️ Rollback view
+              </span>
+            )}
           </div>
 
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
@@ -226,11 +256,12 @@ export default function PipelineView({ runId, serviceName, environment, onClose 
 
         {!loading && run && (
           <>
-            {/* Progress bar */}
+            {/* Progress bar — uses visibleStages counts */}
             <div style={{ marginBottom: 24 }}>
               <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6, alignItems: "center" }}>
                 <span style={{ fontSize: 10, color: "#334155", fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase" }}>
-                  Progress
+                  {/* ── CHANGE 5: label differs for rollback view ── */}
+                  {stageFilter?.length ? "Rollback progress" : "Progress"}
                 </span>
                 <span style={{ fontSize: 11, color: "#475569", fontFamily: "monospace" }}>
                   {successCount} / {totalCount} stages complete
@@ -248,13 +279,29 @@ export default function PipelineView({ runId, serviceName, environment, onClose 
               </div>
             </div>
 
-            {/* Stage timeline */}
+            {/* ── CHANGE 6: info strip shown only in rollback view ── */}
+            {stageFilter?.length > 0 && (
+              <div style={{
+                marginBottom: 16, padding: "8px 12px",
+                background: "#0d0a1a", border: "1px solid #6366f122",
+                borderRadius: 7, display: "flex", alignItems: "center", gap: 8,
+                fontSize: 11, color: "#6366f1",
+              }}>
+                <span>↩️</span>
+                <span>
+                  Rollback pipeline — showing: {stageFilter.join(", ")}
+                </span>
+              </div>
+            )}
+
+            {/* Stage timeline — uses visibleStages */}
             <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>
-              {run.stages.map((stage, idx) => {
+              {/* ── CHANGE 7: render visibleStages instead of run.stages ── */}
+              {visibleStages.map((stage, idx) => {
                 const cfg         = STATUS_CFG[stage.status] ?? STATUS_CFG.pending
                 const isExpanded  = expandedLog === stage.id
                 const hasLogs     = !!stage.logs
-                const prevSuccess = idx > 0 && run.stages[idx - 1].status === "success"
+                const prevSuccess = idx > 0 && visibleStages[idx - 1].status === "success"
 
                 return (
                   <div key={stage.id || idx}>
@@ -361,7 +408,12 @@ export default function PipelineView({ runId, serviceName, environment, onClose 
                 <span style={{ fontSize: 28 }}>{run.status === "success" ? "🎉" : "💥"}</span>
                 <div>
                   <div style={{ fontWeight: 700, fontSize: 14, color: run.status === "success" ? "#10b981" : "#e74c3c" }}>
-                    {run.status === "success" ? "Pipeline completed successfully" : "Pipeline failed — check stage logs above"}
+                    {/* ── CHANGE 8: different success message for rollback ── */}
+                    {run.status === "success"
+                      ? stageFilter?.length
+                        ? "Rollback completed successfully"
+                        : "Pipeline completed successfully"
+                      : "Pipeline failed — check stage logs above"}
                   </div>
                   <div style={{ fontSize: 12, color: "#475569", marginTop: 3 }}>
                     Total time: {formatDuration(run.startedAt, run.completedAt) ?? "—"}
