@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"os"
 	"time"
 )
 
@@ -16,6 +17,71 @@ type githubUser struct {
 
 var githubClient = &http.Client{
 	Timeout: 15 * time.Second,
+}
+
+// getOrgName returns the GitHub organisation name from the environment
+func getOrgName() (string, error) {
+	org := os.Getenv("GITHUB_ORG")
+	if org == "" {
+		log.Println("[GIT][ERROR] GITHUB_ORG environment variable is not set")
+		return "", fmt.Errorf("GITHUB_ORG environment variable is not set")
+	}
+	log.Printf("[GIT] org resolved: %s", org)
+	return org, nil
+}
+
+// repoExistsInOrg checks if a repo exists AND is owned by the given org.
+// Unlike RepoExists, this will return false if the repo exists only in a
+// personal namespace with the same name — preventing false positives.
+func repoExistsInOrg(token, org, repoName string) (bool, error) {
+	log.Printf("[GIT][REPO-EXISTS-ORG] checking org=%s repo=%s", org, repoName)
+
+	url := fmt.Sprintf("https://api.github.com/repos/%s/%s", org, repoName)
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return false, fmt.Errorf("failed to build request: %w", err)
+	}
+
+	req.Header.Set("Authorization",        "token "+token)
+	req.Header.Set("Accept",               "application/vnd.github+json")
+	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+	req.Header.Set("User-Agent",           "platform-backend")
+
+	resp, err := githubClient.Do(req)
+	if err != nil {
+		return false, fmt.Errorf("failed to check org repo existence: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusNotFound {
+		log.Printf("[GIT][REPO-EXISTS-ORG] repo not found org=%s repo=%s", org, repoName)
+		return false, nil
+	}
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return false, fmt.Errorf("unexpected status %d checking org repo: %s", resp.StatusCode, string(body))
+	}
+
+	// Decode and verify the owner is actually the expected org
+	var repoInfo struct {
+		Owner struct {
+			Login string `json:"login"`
+			Type  string `json:"type"`
+		} `json:"owner"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&repoInfo); err != nil {
+		return false, fmt.Errorf("failed to decode repo info: %w", err)
+	}
+
+	// Repo exists but belongs to personal account, not the org — not a conflict
+	if repoInfo.Owner.Type != "Organization" || repoInfo.Owner.Login != org {
+		log.Printf("[GIT][REPO-EXISTS-ORG] repo exists but owner is %s (%s), not org=%s — not a conflict",
+			repoInfo.Owner.Login, repoInfo.Owner.Type, org)
+		return false, nil
+	}
+
+	log.Printf("[GIT][REPO-EXISTS-ORG] ✅ repo confirmed in org org=%s repo=%s", org, repoName)
+	return true, nil
 }
 
 // CreateRepo creates a repository inside the organization only
@@ -28,18 +94,21 @@ func CreateRepo(token, repoName string) (string, error) {
 		return "", err
 	}
 
-	log.Printf("[GIT][CREATE-REPO] checking if repo already exists org=%s repo=%s", org, repoName)
-	exists, err := RepoExists(token, org, repoName)
+	repoURL := fmt.Sprintf("https://github.com/%s/%s", org, repoName)
+
+	// Only treat as "already exists" if it exists AND belongs to the org.
+	// This prevents a personal-namespace repo with the same name from
+	// blocking org repo creation.
+	log.Printf("[GIT][CREATE-REPO] checking if repo already exists under org=%s repo=%s", org, repoName)
+	existsInOrg, err := repoExistsInOrg(token, org, repoName)
 	if err != nil {
-		log.Printf("[GIT][CREATE-REPO][ERROR] repo existence check failed org=%s repo=%s: %v",
+		log.Printf("[GIT][CREATE-REPO][ERROR] org repo existence check failed org=%s repo=%s: %v",
 			org, repoName, err)
 		return "", err
 	}
 
-	repoURL := fmt.Sprintf("https://github.com/%s/%s", org, repoName)
-
-	if exists {
-		log.Printf("[GIT][CREATE-REPO] ⚠️ repo already exists — skipping creation org=%s repo=%s url=%s",
+	if existsInOrg {
+		log.Printf("[GIT][CREATE-REPO] ⚠️ repo already exists in org — skipping creation org=%s repo=%s url=%s",
 			org, repoName, repoURL)
 		return repoURL, nil
 	}
@@ -213,5 +282,3 @@ func RepoExists(token, owner, repoName string) (bool, error) {
 		)
 	}
 }
-
-
