@@ -47,10 +47,13 @@ function StatusBadge({ status }) {
   )
 }
 
-function EnvCard({ env, data, deploying, pendingApproval, onDeploy, onViewPipeline }) {
-  const cfg       = ENV_CFG[env] ?? { color: "#6366f1", bg: "#0d0f2e", label: env, icon: "📦" }
-  const isLoading = deploying?.[env] === true
-  const isDisabled = isLoading || pendingApproval
+function EnvCard({ env, data, deploying, pendingApproval, pipelineRunning, onDeploy, onViewPipeline }) {
+  const cfg           = ENV_CFG[env] ?? { color: "#6366f1", bg: "#0d0f2e", label: env, icon: "📦" }
+  const isLoading     = deploying?.[env] === true
+  const isProd        = env === "prod"
+  // Dev/Test: disabled while triggering OR pipeline actively running
+  // Prod:     disabled while triggering OR awaiting approval OR pipeline running
+  const isDisabled    = isLoading || pendingApproval || pipelineRunning
 
   return (
     <div
@@ -105,6 +108,24 @@ function EnvCard({ env, data, deploying, pendingApproval, onDeploy, onViewPipeli
         </div>
         <StatusBadge status={data?.status ?? "not_deployed"}/>
       </div>
+
+      {/* Pipeline running banner */}
+      {pipelineRunning && !pendingApproval && (
+        <div style={{
+          background: cfg.bg,
+          border: `1px solid ${cfg.color}33`,
+          borderRadius: 7, padding: "8px 12px",
+          display: "flex", alignItems: "center", gap: 8,
+          fontSize: 11, color: cfg.color,
+        }}>
+          <span style={{
+            width: 7, height: 7, borderRadius: "50%",
+            background: cfg.color, flexShrink: 0,
+            animation: "pulse 1.2s ease-in-out infinite",
+          }}/>
+          Pipeline in progress — concurrent deploys disabled
+        </div>
+      )}
 
       {/* Pending approval banner */}
       {pendingApproval && (
@@ -174,6 +195,8 @@ function EnvCard({ env, data, deploying, pendingApproval, onDeploy, onViewPipeli
             ? <><Spinner color={cfg.color}/> Triggering…</>
             : pendingApproval
             ? <><Spinner color={cfg.color}/> Awaiting Approval…</>
+            : pipelineRunning
+            ? <><Spinner color={cfg.color}/> Pipeline Running…</>
             : <>▶ Deploy to {env.toUpperCase()}</>
           }
         </button>
@@ -252,6 +275,7 @@ export default function ServiceDashboard() {
   const [lastUpdated,      setLastUpdated]      = useState(null)
   const [pendingApprovals, setPendingApprovals] = useState({}) // { prod: approvalId }
   const pendingApprovalsRef = useRef({}) // mirror of pendingApprovals for use inside intervals
+  const [runningEnvs, setRunningEnvs] = useState({}) // { dev: true, prod: true } — pipeline active
 
   // keep ref in sync with state
   useEffect(() => {
@@ -268,28 +292,53 @@ export default function ServiceDashboard() {
         setDashboard(data)
         setLastUpdated(new Date())
 
-        // For every env that has a pending approval, check if a pipeline
-        // run has appeared — if yes, clear the badge and open the panel.
-        const pending = pendingApprovalsRef.current
-        for (const env of Object.keys(pending)) {
+        // Check each env for an active pipeline run and update runningEnvs.
+        // Dev/Test: disabled while pipeline is pending or running.
+        // Prod:     disabled while pending_approval OR pipeline is pending/running.
+        const allEnvs = data?.environments ? Object.keys(data.environments) : ["dev", "test", "prod"]
+        const newRunningEnvs = {}
+        for (const env of allEnvs) {
           try {
             const latest = await fetchLatestPipelineRun(serviceName, env)
-            const runId  = latest?.id ?? latest?.runId ?? latest?.run_id
-            if (runId && mounted) {
+            const isActive = latest?.status === "pending" || latest?.status === "running"
+            if (isActive) newRunningEnvs[env] = true
+          } catch {
+            // no pipeline run yet for this env — not running
+          }
+        }
+        if (mounted) setRunningEnvs(newRunningEnvs)
+
+        // For every env that has a pending approval, poll the approval row
+        // directly. Only clear the badge when the approval is approved AND
+        // has a runId. Never use fetchLatestPipelineRun here because that
+        // picks up old completed runs and clears the badge prematurely.
+        const pending = pendingApprovalsRef.current
+        for (const env of Object.keys(pending)) {
+          const approvalId = pending[env]
+          try {
+            const approval = await fetchApprovalById(approvalId)
+            if (!mounted) break
+
+            if (approval.status === "rejected") {
               setPendingApprovals(prev => {
                 const next = { ...prev }
                 delete next[env]
                 return next
               })
-              // Only auto-open if pipeline is active (not a stale old run)
-              if (latest.status === "pending" || latest.status === "running") {
-                setPipelineRunId(runId)
-                setPipelineEnv(env)
-                setShowPipeline(true)
-              }
+              alert(`Production deployment for ${serviceName} was rejected`)
+            } else if (approval.status === "approved" && approval.runId) {
+              setPendingApprovals(prev => {
+                const next = { ...prev }
+                delete next[env]
+                return next
+              })
+              setPipelineRunId(approval.runId)
+              setPipelineEnv(env)
+              setShowPipeline(true)
             }
+            // status === "pending" -> do nothing, keep badge, keep polling
           } catch {
-            // pipeline run not created yet — keep polling
+            // approval fetch failed - keep badge, retry next tick
           }
         }
       } catch {
@@ -358,7 +407,7 @@ export default function ServiceDashboard() {
 
   // ── Deploy → open pipeline panel ─────────────────────────────
   const handleDeploy = async (env) => {
-    if (deploying[env] || pendingApprovals[env]) return
+    if (deploying[env] || pendingApprovals[env] || runningEnvs[env]) return
 
     setDeploying(prev => ({ ...prev, [env]: true }))
 
@@ -563,6 +612,7 @@ export default function ServiceDashboard() {
                   data={dashboard?.environments?.[env]}
                   deploying={deploying}
                   pendingApproval={!!pendingApprovals[env]}
+                  pipelineRunning={!!runningEnvs[env]}
                   onDeploy={() => handleDeploy(env)}
                   onViewPipeline={() => handleViewPipeline(env)}
                 />
