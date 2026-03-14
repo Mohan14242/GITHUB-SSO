@@ -1,8 +1,8 @@
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { useParams, Link } from "react-router-dom"
-import { fetchServiceDashboard, deployService } from "../api/services"
+import { fetchServiceDashboard, deployService } from "../api/serviceApi"
 import { fetchLatestPipelineRun } from "../api/pipelineApi"
-import { fetchApprovalById } from "../api/approvals"
+import { fetchApprovalById } from "../api/approvalApi"
 import PipelineView from "../components/PipelineView"
 import ServiceCard from "../components/ServiceCard"
 
@@ -251,14 +251,47 @@ export default function ServiceDashboard() {
   const [pipelineEnv,      setPipelineEnv]      = useState(null)
   const [lastUpdated,      setLastUpdated]      = useState(null)
   const [pendingApprovals, setPendingApprovals] = useState({}) // { prod: approvalId }
+  const pendingApprovalsRef = useRef({}) // mirror of pendingApprovals for use inside intervals
 
-  // ── Poll dashboard ────────────────────────────────────────────
+  // keep ref in sync with state
+  useEffect(() => {
+    pendingApprovalsRef.current = pendingApprovals
+  }, [pendingApprovals])
+
+  // ── Poll dashboard + resolve any pending approval badges ─────
   useEffect(() => {
     let mounted = true
     async function load() {
       try {
         const data = await fetchServiceDashboard(serviceName)
-        if (mounted) { setDashboard(data); setLastUpdated(new Date()) }
+        if (!mounted) return
+        setDashboard(data)
+        setLastUpdated(new Date())
+
+        // For every env that has a pending approval, check if a pipeline
+        // run has appeared — if yes, clear the badge and open the panel.
+        const pending = pendingApprovalsRef.current
+        for (const env of Object.keys(pending)) {
+          try {
+            const latest = await fetchLatestPipelineRun(serviceName, env)
+            const runId  = latest?.id ?? latest?.runId ?? latest?.run_id
+            if (runId && mounted) {
+              setPendingApprovals(prev => {
+                const next = { ...prev }
+                delete next[env]
+                return next
+              })
+              // Only auto-open if pipeline is active (not a stale old run)
+              if (latest.status === "pending" || latest.status === "running") {
+                setPipelineRunId(runId)
+                setPipelineEnv(env)
+                setShowPipeline(true)
+              }
+            }
+          } catch {
+            // pipeline run not created yet — keep polling
+          }
+        }
       } catch {
         if (mounted) setDashboard(null)
       } finally {
