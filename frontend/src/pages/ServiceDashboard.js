@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react"
 import { useParams, Link } from "react-router-dom"
 import { fetchServiceDashboard, deployService } from "../api/services"
 import { fetchLatestPipelineRun } from "../api/pipelineApi"
-import { fetchApprovalById } from "../api/approvals"
+import { fetchApprovalById, fetchProdApprovals } from "../api/approvals"
 import PipelineView from "../components/PipelineView"
 import ServiceCard from "../components/ServiceCard"
 
@@ -48,12 +48,9 @@ function StatusBadge({ status }) {
 }
 
 function EnvCard({ env, data, deploying, pendingApproval, pipelineRunning, onDeploy, onViewPipeline }) {
-  const cfg           = ENV_CFG[env] ?? { color: "#6366f1", bg: "#0d0f2e", label: env, icon: "📦" }
-  const isLoading     = deploying?.[env] === true
-  const isProd        = env === "prod"
-  // Dev/Test: disabled while triggering OR pipeline actively running
-  // Prod:     disabled while triggering OR awaiting approval OR pipeline running
-  const isDisabled    = isLoading || pendingApproval || pipelineRunning
+  const cfg        = ENV_CFG[env] ?? { color: "#6366f1", bg: "#0d0f2e", label: env, icon: "📦" }
+  const isLoading  = deploying?.[env] === true
+  const isDisabled = isLoading || pendingApproval || pipelineRunning
 
   return (
     <div
@@ -274,15 +271,48 @@ export default function ServiceDashboard() {
   const [pipelineEnv,      setPipelineEnv]      = useState(null)
   const [lastUpdated,      setLastUpdated]      = useState(null)
   const [pendingApprovals, setPendingApprovals] = useState({}) // { prod: approvalId }
-  const pendingApprovalsRef = useRef({}) // mirror of pendingApprovals for use inside intervals
-  const [runningEnvs, setRunningEnvs] = useState({}) // { dev: true, prod: true } — pipeline active
+  const [runningEnvs,      setRunningEnvs]      = useState({}) // { dev: true } — pipeline active
+  const pendingApprovalsRef = useRef({})
 
-  // keep ref in sync with state
+  // keep ref in sync with state so interval callbacks see fresh values
   useEffect(() => {
     pendingApprovalsRef.current = pendingApprovals
   }, [pendingApprovals])
 
-  // ── Poll dashboard + resolve any pending approval badges ─────
+  // ── On mount: restore pending approval state from backend ─────
+  // If the user refreshes while a prod approval is still pending,
+  // this re-hydrates pendingApprovals so the badge and disabled
+  // state are restored without needing to click Deploy again.
+  useEffect(() => {
+    async function restorePendingApprovals() {
+      try {
+        const allApprovals = await fetchProdApprovals()
+        if (!Array.isArray(allApprovals)) return
+
+        // Find the most recent pending approval for THIS service
+        const restoredPending = {}
+        for (const approval of allApprovals) {
+          if (
+            approval.serviceName === serviceName &&
+            approval.status === "pending"
+          ) {
+            // Use prod as the env key — approvals are always prod
+            restoredPending["prod"] = approval.id
+            break // take the most recent one (list is ordered DESC)
+          }
+        }
+
+        if (Object.keys(restoredPending).length > 0) {
+          setPendingApprovals(restoredPending)
+        }
+      } catch (err) {
+        console.warn("[RESTORE] Could not restore pending approvals:", err)
+      }
+    }
+    restorePendingApprovals()
+  }, [serviceName])
+
+  // ── Poll dashboard + active pipelines + approval status ──────
   useEffect(() => {
     let mounted = true
     async function load() {
@@ -292,26 +322,24 @@ export default function ServiceDashboard() {
         setDashboard(data)
         setLastUpdated(new Date())
 
-        // Check each env for an active pipeline run and update runningEnvs.
-        // Dev/Test: disabled while pipeline is pending or running.
-        // Prod:     disabled while pending_approval OR pipeline is pending/running.
-        const allEnvs = data?.environments ? Object.keys(data.environments) : ["dev", "test", "prod"]
+        // Check each env for an active pipeline run → disable deploy button
+        const allEnvs = data?.environments
+          ? Object.keys(data.environments)
+          : DEFAULT_ENVS
         const newRunningEnvs = {}
         for (const env of allEnvs) {
           try {
-            const latest = await fetchLatestPipelineRun(serviceName, env)
+            const latest   = await fetchLatestPipelineRun(serviceName, env)
             const isActive = latest?.status === "pending" || latest?.status === "running"
             if (isActive) newRunningEnvs[env] = true
           } catch {
-            // no pipeline run yet for this env — not running
+            // no run yet for this env — fine
           }
         }
         if (mounted) setRunningEnvs(newRunningEnvs)
 
-        // For every env that has a pending approval, poll the approval row
-        // directly. Only clear the badge when the approval is approved AND
-        // has a runId. Never use fetchLatestPipelineRun here because that
-        // picks up old completed runs and clears the badge prematurely.
+        // For every env with a pending approval badge, poll the approval row.
+        // Clear the badge only when admin approves (+ runId exists) or rejects.
         const pending = pendingApprovalsRef.current
         for (const env of Object.keys(pending)) {
           const approvalId = pending[env]
@@ -326,6 +354,7 @@ export default function ServiceDashboard() {
                 return next
               })
               alert(`Production deployment for ${serviceName} was rejected`)
+
             } else if (approval.status === "approved" && approval.runId) {
               setPendingApprovals(prev => {
                 const next = { ...prev }
@@ -336,9 +365,9 @@ export default function ServiceDashboard() {
               setPipelineEnv(env)
               setShowPipeline(true)
             }
-            // status === "pending" -> do nothing, keep badge, keep polling
+            // status === "pending" → do nothing, keep badge, keep polling
           } catch {
-            // approval fetch failed - keep badge, retry next tick
+            // fetch failed — keep badge, retry next tick
           }
         }
       } catch {
@@ -377,17 +406,17 @@ export default function ServiceDashboard() {
     return null
   }
 
-  // Poll GET /approvals/:id until approved/rejected, return runId
-  async function waitForApproval(approvalId, env) {
-    for (let attempt = 0; attempt < 60; attempt++) {   // up to ~3 mins
+  // Polls approval row every 3s — used as the primary approval waiter
+  // after a fresh Deploy click. The dashboard poll loop is the fallback
+  // that also handles the refresh-restore case.
+  async function waitForApproval(approvalId) {
+    for (let attempt = 0; attempt < 60; attempt++) {
       await new Promise(r => setTimeout(r, 3000))
       try {
         const approval = await fetchApprovalById(approvalId)
-
         if (approval.status === "rejected") {
           throw new Error("Deployment was rejected by admin")
         }
-
         if (approval.status === "approved" && approval.runId) {
           return approval.runId
         }
@@ -420,14 +449,12 @@ export default function ServiceDashboard() {
         const approvalId = res.approvalId
         console.log("[DEPLOY] Prod pending approval approvalId=", approvalId)
 
-        // Stop the button spinner — show approval waiting badge instead
         setDeploying(prev => ({ ...prev, [env]: false }))
         setPendingApprovals(prev => ({ ...prev, [env]: approvalId }))
 
-        // Block here until admin approves (polling every 3s)
-        const runId = await waitForApproval(approvalId, env)
-
-        // Approval received — clear badge and open pipeline
+        // waitForApproval runs in parallel with the dashboard poll loop.
+        // Whichever fires first will open the pipeline view.
+        const runId = await waitForApproval(approvalId)
         setPendingApprovals(prev => { const n = { ...prev }; delete n[env]; return n })
         openPipelineView(runId, env)
         return
@@ -453,7 +480,7 @@ export default function ServiceDashboard() {
   const handleViewPipeline = async (env) => {
     try {
       const run = await fetchLatestPipelineRun(serviceName, env)
-      const id = run?.id ?? run?.runId ?? run?.run_id
+      const id  = run?.id ?? run?.runId ?? run?.run_id
       if (id) {
         setPipelineRunId(id)
         setPipelineEnv(env)
