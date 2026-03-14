@@ -28,7 +28,7 @@ func DeleteRepo(token, repoName string) error {
 
 	// Check repo exists before attempting deletion
 	log.Printf("[GIT][DELETE-REPO] checking repo existence org=%s repo=%s", org, repoName)
-	exists, err := RepoExists(token, org, repoName)
+	exists, err := repoExistsInOrg(token, org, repoName)
 	if err != nil {
 		log.Printf("[GIT][DELETE-REPO][ERROR] existence check failed org=%s repo=%s: %v",
 			org, repoName, err)
