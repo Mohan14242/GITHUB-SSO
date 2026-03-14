@@ -19,7 +19,7 @@ func PushRepo(token, repoName, localPath, branch string) error {
 		repoName, localPath, branch)
 
 	// ── Resolve org ───────────────────────────────────────────────
-	org, err := getOrgName()
+	org, err := GetOrgName()
 	if err != nil {
 		log.Printf("[GIT][PUSH-REPO][ERROR] failed to get org name: %v", err)
 		return err

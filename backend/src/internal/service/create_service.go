@@ -80,20 +80,20 @@ func CreateService(req model.CreateServiceRequest) (string, error) {
 	}
 
 	// 2️⃣ GitHub owner
-	owner, err := git.GetAuthenticatedUser(token)
+	org, err := git.GetOrgName()
 	if err != nil {
+		log.Printf("[GIT][CREATE-REPO][ERROR] failed to get org name: %v", err)
 		return "", err
 	}
 
 	// 3️⃣ Repo existence check
-	repoExists, err := git.RepoExists(token, owner, req.RepoName)
+	repoExists, err := git.RepoExistsInOrg(token, org, req.RepoName)
 	if err != nil {
 		return "", err
 	}
 	if repoExists {
 		return "", errors.New("repository already exists")
 	}
-
 	// 4️⃣ Create repo
 	log.Println("📦 Creating GitHub repo:", req.RepoName)
 	repoURL, err := git.CreateRepo(token, req.RepoName)

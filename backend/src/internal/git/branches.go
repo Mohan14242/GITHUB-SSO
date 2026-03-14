@@ -10,7 +10,7 @@ import (
 )
 
 // getOrgName returns the GitHub organization name from env
-func getOrgName() (string, error) {
+func GetOrgName() (string, error) {
 	org := os.Getenv("GITHUB_ORG")
 	if org == "" {
 		log.Println("[GIT][ERROR] GITHUB_ORG environment variable is not set")
@@ -24,7 +24,7 @@ func getOrgName() (string, error) {
 func CreateBranch(token, repo, newBranch, sourceBranch string) error {
 	log.Printf("[GIT][CREATE-BRANCH] repo=%s newBranch=%s sourceBranch=%s", repo, newBranch, sourceBranch)
 
-	org, err := getOrgName()
+	org, err := GetOrgName()
 	if err != nil {
 		return err
 	}

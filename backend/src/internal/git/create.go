@@ -22,7 +22,7 @@ var githubClient = &http.Client{
 // repoExistsInOrg checks if a repo exists AND is owned by the given org.
 // Unlike RepoExists, this will return false if the repo exists only in a
 // personal namespace with the same name — preventing false positives.
-func repoExistsInOrg(token, org, repoName string) (bool, error) {
+func RepoExistsInOrg(token, org, repoName string) (bool, error) {
 	log.Printf("[GIT][REPO-EXISTS-ORG] checking org=%s repo=%s", org, repoName)
 
 	url := fmt.Sprintf("https://api.github.com/repos/%s/%s", org, repoName)
@@ -77,7 +77,7 @@ func repoExistsInOrg(token, org, repoName string) (bool, error) {
 func CreateRepo(token, repoName string) (string, error) {
 	log.Printf("[GIT][CREATE-REPO] starting repo creation repoName=%s", repoName)
 
-	org, err := getOrgName()
+	org, err := GetOrgName()
 	if err != nil {
 		log.Printf("[GIT][CREATE-REPO][ERROR] failed to get org name: %v", err)
 		return "", err
@@ -89,7 +89,7 @@ func CreateRepo(token, repoName string) (string, error) {
 	// This prevents a personal-namespace repo with the same name from
 	// blocking org repo creation.
 	log.Printf("[GIT][CREATE-REPO] checking if repo already exists under org=%s repo=%s", org, repoName)
-	existsInOrg, err := repoExistsInOrg(token, org, repoName)
+	existsInOrg, err := RepoExistsInOrg(token, org, repoName)
 	if err != nil {
 		log.Printf("[GIT][CREATE-REPO][ERROR] org repo existence check failed org=%s repo=%s: %v",
 			org, repoName, err)
