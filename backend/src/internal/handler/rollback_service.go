@@ -62,7 +62,7 @@ func RollbackService(w http.ResponseWriter, r *http.Request) {
 		audit.Log(r, audit.Entry{
 			Action: "rollback", ResourceType: "deployment",
 			ResourceName: serviceName, Environment: req.Environment,
-			Status: "failed", Details: fmt.Sprintf("DB error checking artifact: %v", err),
+			Status: "failed", Details:"failed to check the DB",
 		})
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -89,7 +89,7 @@ func RollbackService(w http.ResponseWriter, r *http.Request) {
 			Action: "rollback", ResourceType: "deployment",
 			ResourceName: serviceName, Environment: req.Environment,
 			Status:  "failed",
-			Details: fmt.Sprintf("Failed to fetch current environment state: %v", err),
+			Details: "Failed to fetch current environment state",
 		})
 		http.Error(w, "failed to fetch current environment state", http.StatusInternalServerError)
 		return
@@ -170,7 +170,7 @@ func RollbackService(w http.ResponseWriter, r *http.Request) {
 			Action: "rollback", ResourceType: "deployment",
 			ResourceName: serviceName, Environment: req.Environment,
 			Status:  "failed",
-			Details: fmt.Sprintf("CICD trigger failed via %s runID=%d: %v", cicdType, runID, err),
+			Details: fmt.Sprintf("CICD trigger failed via %s runID=%d", cicdType, runID),
 		})
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
