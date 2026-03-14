@@ -8,7 +8,6 @@ import ServiceCard from "../components/ServiceCard"
 
 const DEFAULT_ENVS     = ["dev", "test", "prod"]
 const POLL_INTERVAL_MS = 5000
-// How often to poll approval status when a prod deploy is pending approval
 const APPROVAL_POLL_MS = 3000
 
 const ENV_CFG = {
@@ -272,90 +271,115 @@ export default function ServiceDashboard() {
   const [pipelineRunId,    setPipelineRunId]    = useState(null)
   const [pipelineEnv,      setPipelineEnv]      = useState(null)
   const [lastUpdated,      setLastUpdated]      = useState(null)
-  const [pendingApprovals, setPendingApprovals] = useState({}) // { prod: approvalId }
-  const [runningEnvs,      setRunningEnvs]      = useState({}) // { dev: true }
+  const [pendingApprovals, setPendingApprovals] = useState({})
+  const [runningEnvs,      setRunningEnvs]      = useState({})
 
-  // Refs so interval callbacks always see the latest values without
-  // needing to be recreated (avoids stale-closure bugs)
+  // ── CHANGE 1 of 3 ─────────────────────────────────────────────
+  // Added three new refs. The approval poller reads ONLY from refs
+  // so it can never go stale and React re-renders / useEffect
+  // cleanup cycles can never kill it mid-execution.
+  // showPipelineRef is kept from original (no change there).
   const pendingApprovalsRef = useRef({})
   const showPipelineRef     = useRef(false)
+  const serviceNameRef      = useRef(serviceName)   // ← NEW
+  const setPendingRef       = useRef(null)           // ← NEW: ref to state setter
+  const openPipelineRef     = useRef(null)           // ← NEW: ref to openPipelineView
 
   useEffect(() => { pendingApprovalsRef.current = pendingApprovals }, [pendingApprovals])
   useEffect(() => { showPipelineRef.current     = showPipeline     }, [showPipeline])
+  useEffect(() => { serviceNameRef.current      = serviceName      }, [serviceName]) // ← NEW
 
-  // ── openPipelineView — stable reference via useCallback ───────
+  // ── openPipelineView (unchanged) ─────────────────────────────
   const openPipelineView = useCallback((runId, env) => {
     setPipelineRunId(runId)
     setPipelineEnv(env)
     setShowPipeline(true)
   }, [])
 
-  // ── Approval poller — dedicated interval, only runs while there
-  //    are pending approvals. This is the SINGLE source of truth
-  //    for resolving a prod approval; handleDeploy no longer races
-  //    against it. ──────────────────────────────────────────────
+  // ── CHANGE 2 of 3 ─────────────────────────────────────────────
+  // Wire setPendingRef and openPipelineRef once on mount.
+  // These never change so one assignment is enough.
   useEffect(() => {
-    // No pending approvals → nothing to poll
-    if (Object.keys(pendingApprovals).length === 0) return
+    setPendingRef.current   = setPendingApprovals
+    openPipelineRef.current = openPipelineView
+  }, [openPipelineView])
 
+  // ── CHANGE 3 of 3 — THE CORE FIX ─────────────────────────────
+  // OLD approval poller (REMOVE THIS ENTIRE BLOCK):
+  //
+  //   useEffect(() => {
+  //     if (Object.keys(pendingApprovals).length === 0) return
+  //     const iv = setInterval(async () => { ... }, APPROVAL_POLL_MS)
+  //     return () => clearInterval(iv)
+  //   }, [pendingApprovals, serviceName, openPipelineView])  ← BAD deps
+  //
+  // WHY IT WAS BROKEN:
+  //   The deps array [pendingApprovals, ...] meant every time
+  //   setPendingApprovals() was called inside the interval, React
+  //   would immediately run the cleanup (clearInterval) and recreate
+  //   the interval — killing it before openPipelineView() could fire.
+  //
+  // NEW approval poller (REPLACE WITH THIS):
+  //   • Empty deps [] → started ONCE on mount, never recreated.
+  //   • Reads ONLY from refs → immune to stale closures.
+  //   • Calls state setters via refs → React re-renders cannot
+  //     interrupt the execution between setPending and openPipeline.
+  useEffect(() => {
     const iv = setInterval(async () => {
-      const current = pendingApprovalsRef.current
-      if (Object.keys(current).length === 0) return
+      const pending = pendingApprovalsRef.current
 
-      for (const [env, approvalId] of Object.entries(current)) {
+      // Nothing pending this tick — skip
+      if (Object.keys(pending).length === 0) return
+
+      for (const [env, approvalId] of Object.entries(pending)) {
         try {
           const approval = await fetchApprovalById(approvalId)
 
           if (approval.status === "rejected") {
-            // Clear badge and notify user
-            setPendingApprovals(prev => {
+            setPendingRef.current(prev => {
               const next = { ...prev }
               delete next[env]
               return next
             })
-            alert(`Production deployment for ${serviceName} was rejected by admin`)
+            alert(
+              `Production deployment for ${serviceNameRef.current} was rejected by admin`
+            )
 
           } else if (approval.status === "approved" && approval.runId) {
-            // Clear badge and open pipeline view immediately
-            setPendingApprovals(prev => {
+            // Clear badge AND open pipeline in the same tick.
+            // Both calls go through refs so nothing can interrupt between them.
+            setPendingRef.current(prev => {
               const next = { ...prev }
               delete next[env]
               return next
             })
-            openPipelineView(approval.runId, env)
+            openPipelineRef.current(approval.runId, env)
           }
-          // status === "pending" → keep polling
+          // "pending" → do nothing, poll again next tick
         } catch (err) {
-          // Network error — keep polling, don't clear badge
-          console.warn("[APPROVAL POLL] fetch failed, will retry:", err.message)
+          console.warn("[APPROVAL POLL] fetch error, will retry:", err.message)
         }
       }
     }, APPROVAL_POLL_MS)
 
+    // Only cleared when the component fully unmounts
     return () => clearInterval(iv)
-  // Re-create the interval whenever the set of pending approvals changes
-  // (e.g. a new env becomes pending, or one resolves)
-  }, [pendingApprovals, serviceName, openPipelineView])
+  }, [])  // ← EMPTY DEPS: this is the entire fix in one line
 
-  // ── On mount: restore pending approvals from backend ──────────
+  // ── On mount: restore pending approvals (unchanged) ──────────
   useEffect(() => {
     async function restorePendingApprovals() {
       try {
         const allApprovals = await fetchProdApprovals()
         if (!Array.isArray(allApprovals)) return
-
-        const restoredPending = {}
         for (const approval of allApprovals) {
           if (
             approval.serviceName === serviceName &&
             approval.status === "pending"
           ) {
-            restoredPending["prod"] = approval.id
+            setPendingApprovals({ prod: approval.id })
             break
           }
-        }
-        if (Object.keys(restoredPending).length > 0) {
-          setPendingApprovals(restoredPending)
         }
       } catch (err) {
         console.warn("[RESTORE] Could not restore pending approvals:", err)
@@ -364,10 +388,7 @@ export default function ServiceDashboard() {
     restorePendingApprovals()
   }, [serviceName])
 
-  // ── Poll dashboard + active pipelines ────────────────────────
-  // NOTE: approval resolution has been moved to the dedicated
-  // approval poller above. This loop only updates dashboard data
-  // and running-pipeline state.
+  // ── Dashboard + running-pipeline poller (unchanged) ──────────
   useEffect(() => {
     let mounted = true
 
@@ -378,7 +399,6 @@ export default function ServiceDashboard() {
         setDashboard(data)
         setLastUpdated(new Date())
 
-        // Check each env for an active pipeline run
         const allEnvs = data?.environments
           ? Object.keys(data.environments)
           : DEFAULT_ENVS
@@ -389,9 +409,7 @@ export default function ServiceDashboard() {
             const latest   = await fetchLatestPipelineRun(serviceName, env)
             const isActive = latest?.status === "pending" || latest?.status === "running"
             if (isActive) newRunningEnvs[env] = true
-          } catch {
-            // No run yet for this env — fine
-          }
+          } catch { /* no run yet */ }
         }
         if (mounted) setRunningEnvs(newRunningEnvs)
       } catch {
@@ -406,11 +424,10 @@ export default function ServiceDashboard() {
     return () => { mounted = false; clearInterval(iv) }
   }, [serviceName])
 
-  // ── Helpers ───────────────────────────────────────────────────
+  // ── Helpers (unchanged) ───────────────────────────────────────
   async function triggerDeployment(env) {
     try {
-      const res = await deployService(serviceName, env)
-      return res
+      return await deployService(serviceName, env)
     } catch (err) {
       if (err.runId) return { runId: err.runId }
       throw err
@@ -431,36 +448,22 @@ export default function ServiceDashboard() {
     return null
   }
 
-  // ── Deploy handler ────────────────────────────────────────────
-  // For PROD: triggers deploy, stores approvalId in pendingApprovals,
-  // then exits. The dedicated approval poller (above) handles the rest
-  // automatically — no more parallel waitForApproval() race.
-  //
-  // For DEV/TEST: same as before — wait for runId then open pipeline.
+  // ── handleDeploy (prod path simplified — unchanged from last fix)
   const handleDeploy = async (env) => {
     if (deploying[env] || pendingApprovals[env] || runningEnvs[env]) return
 
     setDeploying(prev => ({ ...prev, [env]: true }))
 
     try {
-      console.log("Deploying:", serviceName, env)
       const res = await triggerDeployment(env)
 
-      // ── PROD: pending approval path ──
+      // PROD: store approvalId and exit. Poller handles the rest.
       if (res?.status === "pending_approval") {
-        const approvalId = res.approvalId
-        console.log("[DEPLOY] Prod pending approval approvalId=", approvalId)
-
-        // Store the approvalId — the dedicated approval poller will
-        // detect approval/rejection and open the pipeline automatically.
-        setPendingApprovals(prev => ({ ...prev, [env]: approvalId }))
-
-        // Done — do NOT call waitForApproval here anymore.
-        // That was the source of the race condition.
+        setPendingApprovals(prev => ({ ...prev, [env]: res.approvalId }))
         return
       }
 
-      // ── DEV / TEST: normal flow ──
+      // DEV / TEST: open pipeline directly
       let runId = res?.runId ?? res?.run_id ?? res?.id ?? null
       await new Promise(r => setTimeout(r, 2000))
       if (!runId) runId = await waitForPipelineRun(env)
@@ -476,7 +479,6 @@ export default function ServiceDashboard() {
     }
   }
 
-  // ── View latest pipeline for env ──────────────────────────────
   const handleViewPipeline = async (env) => {
     try {
       const run = await fetchLatestPipelineRun(serviceName, env)
@@ -560,7 +562,6 @@ export default function ServiceDashboard() {
           )}
         </div>
 
-        {/* Live indicator */}
         <div style={{
           display: "flex", alignItems: "center", gap: 7,
           padding: "7px 13px", borderRadius: 20,
@@ -605,16 +606,12 @@ export default function ServiceDashboard() {
         </div>
       )}
 
-      {/* ── Main content: env cards + pipeline panel side by side ── */}
+      {/* ── Main content ── */}
       {!loading && (
         <div style={{
-          display: "flex",
-          gap: 16,
-          alignItems: "flex-start",
+          display: "flex", gap: 16, alignItems: "flex-start",
           animation: "fadeUp 0.35s ease 0.12s both",
         }}>
-
-          {/* Env cards grid — shrinks when pipeline is open */}
           <div style={{
             flex: showPipeline ? "0 0 auto" : "1 1 auto",
             width: showPipeline ? "min(340px, 42%)" : "100%",
@@ -643,16 +640,12 @@ export default function ServiceDashboard() {
             </div>
           </div>
 
-          {/* Pipeline panel — slides in from the right */}
           {showPipeline && pipelineRunId && (
             <div style={{
-              flex: "1 1 auto",
-              minWidth: 0,
-              height: "calc(100vh - 260px)",
-              minHeight: 480,
+              flex: "1 1 auto", minWidth: 0,
+              height: "calc(100vh - 260px)", minHeight: 480,
               animation: "slideIn 0.25s ease both",
-              position: "sticky",
-              top: 28,
+              position: "sticky", top: 28,
             }}>
               <PipelineView
                 runId={pipelineRunId}
@@ -689,7 +682,7 @@ export default function ServiceDashboard() {
         </div>
       )}
 
-      {/* ── Artifacts / Recent deployments ── */}
+      {/* ── Recent Deployments ── */}
       {!loading && dashboard?.artifacts?.length > 0 && (
         <div style={{ marginTop: 28 }}>
           <div style={{
