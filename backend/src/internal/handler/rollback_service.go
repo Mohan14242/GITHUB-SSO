@@ -147,7 +147,21 @@ func RollbackService(w http.ResponseWriter, r *http.Request) {
 	}
 	log.Printf("[ROLLBACK] rollback pipeline run created runID=%d service=%s env=%s stages=Rollback,HealthCheck\n",
 		runID, serviceName, req.Environment)
+	
+	var branch string
+	switch req.Environment {
+	case "dev":
+		branch = "dev"
+	case "test":
+		branch = "test"
+	case "prod":
+		branch = "master"
+	default:
+		http.Error(w, "invalid environment", http.StatusBadRequest)
+		return
+	}
 
+	log.Printf("[ROLLBACK] env=%s mappedBranch=%s\n", req.Environment, branch)
 	// Trigger rollback via CICD
 	switch cicdType {
 	case "jenkins":
